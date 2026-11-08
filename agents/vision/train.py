@@ -1,11 +1,11 @@
 """Train the YOLOv8n baseline on CPU and log everything to MLflow.
 
-Usage (from the repo root, venv activated, MLflow server running):
+Usage (from the repo root, venv activated, .env filled with DagsHub credentials):
     python -m agents.vision.train                 # full baseline (config.yaml)
     python -m agents.vision.train --smoke         # 1 epoch on 10% of train: checks the pipeline
 
-Env vars:
-    MLFLOW_TRACKING_URI   default http://localhost:5000 (AGENTS.md section 6)
+Env vars (read from .env):
+    MLFLOW_TRACKING_URI   shared DagsHub MLflow (AGENTS.md section 6)
     VISION_CONFIG         default agents/vision/config.yaml
 """
 import argparse
@@ -18,7 +18,10 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 import yaml
+from dotenv import load_dotenv
 from ultralytics import YOLO, settings
+
+load_dotenv()  # MLFLOW_TRACKING_URI + DagsHub credentials from .env (AGENTS.md section 6)
 
 CONFIG_PATH = Path(os.getenv("VISION_CONFIG", "agents/vision/config.yaml"))
 
