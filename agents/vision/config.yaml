@@ -11,7 +11,6 @@ split:
   ratios: {train: 0.7, valid: 0.15, test: 0.15}
   seed: 42
 class_mapping: agents/vision/class_mapping.yaml
-
 train:
   base_model: yolov8n.pt           # COCO-pretrained, downloaded by Ultralytics
   epochs: 20
@@ -21,11 +20,11 @@ train:
   patience: 10                     # early stopping on val mAP
   seed: 42
   runs_dir: runs/vision            # Ultralytics outputs (git-ignored)
-  export_path: models/vision/yolov8n_baseline.pt   # DVC-tracked later
+  export_dir: models/vision        # best.pt copied to <export_dir>/<run_name>.pt (DVC-tracked)
 mlflow:
   experiment: claimspilot-vision
   owner: wiem
-  sprint: "1"
+  sprint: "2"
 agent:
   weights: models/vision/yolov8n_baseline.pt   # DVC-tracked (dvc pull)
   conf: 0.25                       # min confidence to keep a detection
