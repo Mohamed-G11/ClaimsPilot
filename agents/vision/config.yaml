@@ -32,3 +32,16 @@ agent:
   iou: 0.5                         # NMS IoU threshold
   imgsz: 640
   model_version: yolov8n-baseline@1978f3ebb19543b19d628bc34c0f9ef0   # MLflow run id (DagsHub)
+severity:
+  # Claim severity = points summed over all damages, then mapped with `thresholds`.
+  # Points per damage = type_points[damage_type] + size points (box area / image area)
+  #                     + hint_points[severity_hint from the class name, e.g. "Major-"].
+  type_points: {scratch: 1, dent: 2, crack: 2, glass_shatter: 3}
+  default_type_points: 1
+  size_points:                     # first bucket whose max_area >= box area ratio
+    - {max_area: 0.02, points: 0}  # small: < 2% of the image
+    - {max_area: 0.10, points: 1}  # medium: 2-10%
+    - {max_area: 1.00, points: 2}  # large: > 10%
+  hint_points: {minor: 0, moderate: 1, severe: 2}
+  thresholds: {moderate: 4, severe: 8}
+  hint_floor: true                 # never below the worst Minor/Medium/Major hint
