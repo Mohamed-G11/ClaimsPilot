@@ -37,7 +37,7 @@ def test_run_maps_detections_to_schema(monkeypatch, photo):
     VisionResult.model_validate(result.model_dump())  # round-trip through the contract
     assert result.claim_id == "C-001"
     assert [(d.part, d.damage_type) for d in result.damages] == [
-        ("rear_bumper", "dent"), ("tail_light", "crack")]
+        ("rear_bumper", "dent"), ("taillight", "crack")]
     assert result.damages[0].bbox == [10.0, 20.0, 110.0, 220.0]
     assert all(0 <= d.confidence <= 1 for d in result.damages)
     assert result.severity == "severe"  # "Major-" hint
