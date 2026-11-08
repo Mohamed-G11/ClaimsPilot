@@ -11,3 +11,24 @@ split:
   ratios: {train: 0.7, valid: 0.15, test: 0.15}
   seed: 42
 class_mapping: agents/vision/class_mapping.yaml
+
+train:
+  base_model: yolov8n.pt           # COCO-pretrained, downloaded by Ultralytics
+  epochs: 20
+  imgsz: 640
+  batch: 16
+  workers: 2
+  patience: 10                     # early stopping on val mAP
+  seed: 42
+  runs_dir: runs/vision            # Ultralytics outputs (git-ignored)
+  export_path: models/vision/yolov8n_baseline.pt   # DVC-tracked later
+mlflow:
+  experiment: claimspilot-vision
+  owner: wiem
+  sprint: "1"
+agent:
+  weights: models/vision/yolov8n_baseline.pt   # DVC-tracked (dvc pull)
+  conf: 0.25                       # min confidence to keep a detection
+  iou: 0.5                         # NMS IoU threshold
+  imgsz: 640
+  model_version: yolov8n-baseline@1978f3ebb19543b19d628bc34c0f9ef0   # MLflow run id (DagsHub)
