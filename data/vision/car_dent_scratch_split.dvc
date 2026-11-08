@@ -1,0 +1,6 @@
+outs:
+- md5: 545b9cafe8c0be15216b8cbf7674f32e.dir
+  size: 355099767
+  nfiles: 4816
+  hash: md5
+  path: car_dent_scratch_split
