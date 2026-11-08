@@ -26,3 +26,9 @@ mlflow:
   experiment: claimspilot-vision
   owner: wiem
   sprint: "1"
+agent:
+  weights: models/vision/yolov8n_baseline.pt   # DVC-tracked (dvc pull)
+  conf: 0.25                       # min confidence to keep a detection
+  iou: 0.5                         # NMS IoU threshold
+  imgsz: 640
+  model_version: yolov8n-baseline@1978f3ebb19543b19d628bc34c0f9ef0   # MLflow run id (DagsHub)
