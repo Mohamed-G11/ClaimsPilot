@@ -5,3 +5,4 @@ httpx
 dvc
 mlflow 
 python-dotenv
+pyyaml
