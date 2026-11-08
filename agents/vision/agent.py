@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+# isort: split
 from claimspilot.schemas import ClaimInput, Damage, VisionResult
 
 logger = logging.getLogger(__name__)
