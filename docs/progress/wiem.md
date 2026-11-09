@@ -5,3 +5,15 @@ Done: Roboflow car damage dataset (sindhu/car_dent_scratch_detection-sekha v1, C
 Metrics: YOLOv8n baseline — test mAP50 = 0.183 (mAP50-95 0.089, P 0.290, R 0.248). MLflow run id 1978f3ebb19543b19d628bc34c0f9ef0 (experiment claimspilot-vision, DagsHub), data_version dvc:545b9cafe8c0be15216b8cbf7674f32e.dir.
 Blocked by: claimspilot/schemas.py not on main yet (vision tests are skipped in CI until it exists); vision deps (pyyaml, ultralytics, torch CPU) missing in CI.
 Next (sprint 2): merge severity variants into (part, damage_type) classes + separate severity rule to improve mAP50; retrain and register the model in the MLflow Model Registry; serve VisionResult through the API.
+
+## 2026-11-08 — Sprint 2
+Done: parts mapped to the shared vocabulary (unknown → other, tail_light → taillight); train.py loads .env (shared DagsHub MLflow); requirements-vision.txt; severity rule based on number, type and size of damages (+ Minor/Medium/Major hint as a floor), fully configurable in config.yaml; edge cases handled and tested (missing photo, unreadable photo, unmapped class, no damage).
+Metrics: 12 vision tests passing (fake model in CI + 1 integration test on the real weights). Baseline unchanged: test mAP50 = 0.183, MLflow run 1978f3ebb19543b19d628bc34c0f9ef0.
+Blocked by: PR #9 review (vocabulary + requirements); claimspilot/schemas.py on main (vision tests skipped in CI until then).
+Next: register the model in the MLflow Model Registry; second training to compare (more epochs or YOLOv8s); run the agent on 3 sample claim photos.
+
+## 2026-11-09 — Sprint 2
+Done: second training to compare (stretch 8): YOLOv8n 30 epochs, logged directly to the shared DagsHub MLflow; train.py gets --name / --model options so comparison runs never overwrite the baseline; yolov8n_e30.pt versioned with DVC and used by the agent (config.yaml).
+Metrics: yolov8n-e30 — test mAP50 = 0.199 (vs 0.183 baseline), mAP50-95 0.092, P 0.313, R 0.251. MLflow run id 7c062edcdbf94027b6484f220433c831. Longer training helps only slightly → the 18 severity-split classes are the main limit.
+Blocked by: review of PR #9 and #10 (this PR is built on top of them); claimspilot/schemas.py on main.
+Next: register yolov8n-e30 in the MLflow Model Registry (stretch 7); run the agent on 3 sample claim photos and share example VisionResult outputs with Hend and Mohamed.

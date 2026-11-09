@@ -1,0 +1,5 @@
+outs:
+- md5: 25f4c6a2c9668d08922ea75daa345d85
+  size: 6513770
+  hash: md5
+  path: yolov8n_e30.pt

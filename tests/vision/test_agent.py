@@ -1,4 +1,4 @@
-"""Tests for the vision agent (AGENTS.md section 6: tiny sample, output matches schema)."""
+"""Tests for the vision agent (AGENTS.md section 6: run() returns a valid result, fake model)."""
 from pathlib import Path
 
 import pytest
@@ -8,8 +8,11 @@ agent = pytest.importorskip("agents.vision.agent")
 
 schemas = pytest.importorskip("claimspilot.schemas")
 ClaimInput, VisionResult = schemas.ClaimInput, schemas.VisionResult
+Detection = agent.Detection
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SHARED_PARTS = {"front_bumper", "rear_bumper", "door", "hood", "trunk", "fender", "headlight",
+                "taillight", "windshield", "side_mirror", "wheel", "other"}
 
 
 @pytest.fixture
@@ -24,11 +27,17 @@ def make_claim(paths: list[str]) -> ClaimInput:
                       policy_id="P-1")
 
 
+def det(class_name: str, area: float = 0.05) -> Detection:
+    return Detection(class_name, [10.0, 20.0, 110.0, 220.0], 0.9, area)
+
+
+def severity(*detections: Detection) -> str:
+    cfg = agent._config()
+    return agent._severity(list(detections), cfg["mapping"], cfg["severity"])
+
+
 def test_run_maps_detections_to_schema(monkeypatch, photo):
-    fake = [
-        ("Major-rear-bumper-dent", [10.0, 20.0, 110.0, 220.0], 0.91),
-        ("backlight", [5.0, 5.0, 50.0, 40.0], 0.55),
-    ]
+    fake = [det("Major-rear-bumper-dent", 0.15), det("backlight", 0.01)]
     monkeypatch.setattr(agent, "_detect", lambda _path: fake)
 
     result = agent.run(make_claim([photo]))
@@ -37,11 +46,16 @@ def test_run_maps_detections_to_schema(monkeypatch, photo):
     VisionResult.model_validate(result.model_dump())  # round-trip through the contract
     assert result.claim_id == "C-001"
     assert [(d.part, d.damage_type) for d in result.damages] == [
-        ("rear_bumper", "dent"), ("tail_light", "crack")]
+        ("rear_bumper", "dent"), ("taillight", "crack")]
     assert result.damages[0].bbox == [10.0, 20.0, 110.0, 220.0]
     assert all(0 <= d.confidence <= 1 for d in result.damages)
-    assert result.severity == "severe"  # "Major-" hint
+    assert result.severity == "severe"
     assert result.model_version
+
+
+def test_all_mapped_parts_use_shared_vocabulary():
+    mapping = agent._config()["mapping"]
+    assert {info["part"] for info in mapping.values()} <= SHARED_PARTS
 
 
 def test_missing_photo_gives_empty_result(monkeypatch):
@@ -51,29 +65,57 @@ def test_missing_photo_gives_empty_result(monkeypatch):
     assert result.severity == "minor"
 
 
+def test_unreadable_photo_does_not_crash(monkeypatch, photo):
+    def broken(_path):
+        raise ValueError("cannot decode image")
+
+    monkeypatch.setattr(agent, "_detect", broken)
+    result = agent.run(make_claim([photo]))
+    assert result.damages == []
+
+
 def test_unmapped_class_is_ignored(monkeypatch, photo):
-    monkeypatch.setattr(agent, "_detect", lambda _path: [("car", [0, 0, 1, 1], 0.9)])
+    monkeypatch.setattr(agent, "_detect", lambda _path: [det("car")])
     assert agent.run(make_claim([photo])).damages == []
 
 
-@pytest.mark.parametrize(
-    ("classes", "expected"),
-    [
-        ([], "minor"),
-        (["Minor-scratch"], "minor"),
-        (["Medium-scratch"], "moderate"),
-        (["scratch", "dent", "headlight-damage"], "moderate"),
-        (["scratch"] * 5, "severe"),
-    ],
-)
-def test_severity_rule(classes, expected):
-    assert agent._severity(classes, agent._config()["mapping"]) == expected
+# --- severity rule (number, type and size of damages; config.yaml `severity`) ---
+
+def test_no_damage_is_minor():
+    assert severity() == "minor"
+
+
+def test_small_scratch_is_minor():
+    assert severity(det("scratch", 0.01)) == "minor"  # 1 (type) + 0 (size)
+
+
+def test_size_matters():
+    assert severity(det("dent", 0.01)) == "minor"                         # 2 + 0 = 2
+    assert severity(det("dent", 0.01), det("dent", 0.15)) == "moderate"   # 2 + 4 = 6
+
+
+def test_type_matters():
+    # same (large) size: scratch 1+2 = 3 -> minor, crack 2+2 = 4 -> moderate
+    assert severity(det("scratch", 0.15)) == "minor"
+    assert severity(det("headlight-damage", 0.15)) == "moderate"
+
+
+def test_number_matters():
+    assert severity(det("scratch", 0.05)) == "minor"           # 2
+    assert severity(*[det("scratch", 0.05)] * 3) == "moderate"  # 6
+    assert severity(*[det("dent", 0.15)] * 3) == "severe"       # 12
+
+
+def test_class_hint_is_a_floor():
+    assert severity(det("Minor-scratch", 0.01)) == "minor"
+    assert severity(det("Medium-scratch", 0.01)) == "moderate"
+    assert severity(det("Major-scratch", 0.01)) == "severe"
 
 
 def test_run_on_real_test_image():
     """Integration test with the real weights and one test image (skipped if not pulled)."""
     pytest.importorskip("ultralytics")
-    weights = REPO_ROOT / "models/vision/yolov8n_baseline.pt"
+    weights = REPO_ROOT / agent._config()["agent"]["weights"]
     images = sorted((REPO_ROOT / "data/vision/car_dent_scratch_split/test/images").glob("*.jpg"))
     if not weights.exists() or not images:
         pytest.skip("weights or test images not available (run `dvc pull`)")

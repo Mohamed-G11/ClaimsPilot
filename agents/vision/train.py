@@ -1,11 +1,13 @@
-"""Train the YOLOv8n baseline on CPU and log everything to MLflow.
+"""Train a YOLOv8 model on CPU and log everything to the shared MLflow (DagsHub).
 
-Usage (from the repo root, venv activated, MLflow server running):
-    python -m agents.vision.train                 # full baseline (config.yaml)
-    python -m agents.vision.train --smoke         # 1 epoch on 10% of train: checks the pipeline
+Usage (from the repo root, venv activated, .env filled with DagsHub credentials):
+    python -m agents.vision.train                                   # baseline (config.yaml)
+    python -m agents.vision.train --smoke                           # 1 epoch on 10% of train
+    python -m agents.vision.train --epochs 30 --name yolov8n-e30    # second training
+    python -m agents.vision.train --model yolov8s.pt --name yolov8s # bigger model
 
-Env vars:
-    MLFLOW_TRACKING_URI   default http://localhost:5000 (AGENTS.md section 6)
+Env vars (read from .env):
+    MLFLOW_TRACKING_URI   shared DagsHub MLflow (AGENTS.md section 6)
     VISION_CONFIG         default agents/vision/config.yaml
 """
 import argparse
@@ -18,7 +20,10 @@ from pathlib import Path
 import mlflow
 import pandas as pd
 import yaml
+from dotenv import load_dotenv
 from ultralytics import YOLO, settings
+
+load_dotenv()  # MLFLOW_TRACKING_URI + DagsHub credentials from .env (AGENTS.md section 6)
 
 CONFIG_PATH = Path(os.getenv("VISION_CONFIG", "agents/vision/config.yaml"))
 
@@ -50,6 +55,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true", help="1 epoch on 10%% of train")
     parser.add_argument("--epochs", type=int, help="override config epochs")
+    parser.add_argument("--model", help="override base model, e.g. yolov8s.pt")
+    parser.add_argument("--name", default="yolov8n-baseline",
+                        help="run name; weights exported to models/vision/<name_with_underscores>.pt")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
@@ -58,7 +66,8 @@ def main() -> None:
     data_yaml = data_dir / "data.yaml"
     epochs = 1 if args.smoke else (args.epochs or tcfg["epochs"])
     fraction = 0.1 if args.smoke else 1.0
-    run_name = "yolov8n-smoke" if args.smoke else "yolov8n-baseline"
+    run_name = "yolov8n-smoke" if args.smoke else args.name
+    base_model = args.model or tcfg["base_model"]
 
     # We log to MLflow ourselves (required tags); disable Ultralytics' own MLflow callback.
     settings.update({"mlflow": False})
@@ -74,7 +83,7 @@ def main() -> None:
     }
     with mlflow.start_run(run_name=run_name, tags=tags) as run:
         params = {
-            "base_model": tcfg["base_model"], "epochs": epochs, "imgsz": tcfg["imgsz"],
+            "base_model": base_model, "epochs": epochs, "imgsz": tcfg["imgsz"],
             "batch": tcfg["batch"], "patience": tcfg["patience"], "seed": tcfg["seed"],
             "fraction": fraction, "device": "cpu",
             "dataset": f"{cfg['dataset']['workspace']}/{cfg['dataset']['project']}"
@@ -83,7 +92,7 @@ def main() -> None:
         }
         mlflow.log_params(params)
 
-        model = YOLO(tcfg["base_model"])
+        model = YOLO(base_model)
         model.train(
             data=str(data_yaml), epochs=epochs, imgsz=tcfg["imgsz"], batch=tcfg["batch"],
             workers=tcfg["workers"], patience=tcfg["patience"], seed=tcfg["seed"],
@@ -126,7 +135,7 @@ def main() -> None:
                 mlflow.log_artifact(str(f), artifact_path="plots")
 
         if not args.smoke:
-            export = Path(tcfg["export_path"])
+            export = Path(tcfg["export_dir"]) / f"{run_name.replace('-', '_')}.pt"
             export.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(best, export)
             mlflow.set_tag("export_path", export.as_posix())

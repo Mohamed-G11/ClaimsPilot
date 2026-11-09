@@ -11,7 +11,6 @@ split:
   ratios: {train: 0.7, valid: 0.15, test: 0.15}
   seed: 42
 class_mapping: agents/vision/class_mapping.yaml
-
 train:
   base_model: yolov8n.pt           # COCO-pretrained, downloaded by Ultralytics
   epochs: 20
@@ -21,14 +20,27 @@ train:
   patience: 10                     # early stopping on val mAP
   seed: 42
   runs_dir: runs/vision            # Ultralytics outputs (git-ignored)
-  export_path: models/vision/yolov8n_baseline.pt   # DVC-tracked later
+  export_dir: models/vision        # best.pt copied to <export_dir>/<run_name>.pt (DVC-tracked)
 mlflow:
   experiment: claimspilot-vision
   owner: wiem
-  sprint: "1"
+  sprint: "2"
 agent:
-  weights: models/vision/yolov8n_baseline.pt   # DVC-tracked (dvc pull)
+  weights: models/vision/yolov8n_e30.pt        # best model so far (DVC-tracked, dvc pull)
   conf: 0.25                       # min confidence to keep a detection
   iou: 0.5                         # NMS IoU threshold
   imgsz: 640
-  model_version: yolov8n-baseline@1978f3ebb19543b19d628bc34c0f9ef0   # MLflow run id (DagsHub)
+  model_version: yolov8n-e30@7c062edcdbf94027b6484f220433c831   # MLflow run id (DagsHub)
+severity:
+  # Claim severity = points summed over all damages, then mapped with `thresholds`.
+  # Points per damage = type_points[damage_type] + size points (box area / image area)
+  #                     + hint_points[severity_hint from the class name, e.g. "Major-"].
+  type_points: {scratch: 1, dent: 2, crack: 2, glass_shatter: 3}
+  default_type_points: 1
+  size_points:                     # first bucket whose max_area >= box area ratio
+    - {max_area: 0.02, points: 0}  # small: < 2% of the image
+    - {max_area: 0.10, points: 1}  # medium: 2-10%
+    - {max_area: 1.00, points: 2}  # large: > 10%
+  hint_points: {minor: 0, moderate: 1, severe: 2}
+  thresholds: {moderate: 4, severe: 8}
+  hint_floor: true                 # never below the worst Minor/Medium/Major hint

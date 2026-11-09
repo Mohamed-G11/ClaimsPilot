@@ -1,13 +1,14 @@
 """Vision agent: detect car damages on claim photos with YOLOv8.
 
 Contract (AGENTS.md section 4): run(claim: ClaimInput) -> VisionResult.
-Runs on CPU. Config: agents/vision/config.yaml (section `agent`), overridable with
-VISION_CONFIG / VISION_WEIGHTS env vars.
+Runs on CPU. Config: agents/vision/config.yaml (sections `agent` and `severity`),
+overridable with VISION_CONFIG / VISION_WEIGHTS env vars.
 """
 import logging
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 
@@ -19,15 +20,21 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(os.getenv("VISION_CONFIG", "agents/vision/config.yaml"))
 SEVERITY_ORDER = ["minor", "moderate", "severe"]
 
-# A detection before mapping: (dataset class name, [x1, y1, x2, y2] in pixels, confidence)
-Detection = tuple[str, list[float], float]
+
+class Detection(NamedTuple):
+    """A raw YOLO detection, before mapping to the shared Damage schema."""
+
+    class_name: str        # dataset class, e.g. "Major-rear-bumper-dent"
+    bbox: list[float]      # [x1, y1, x2, y2] in pixels
+    confidence: float      # 0..1
+    area_ratio: float      # box area / image area (0..1), used by the severity rule
 
 
 @lru_cache(maxsize=1)
 def _config() -> dict:
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     mapping = yaml.safe_load(Path(cfg["class_mapping"]).read_text(encoding="utf-8"))
-    return {"agent": cfg["agent"], "mapping": mapping}
+    return {"agent": cfg["agent"], "severity": cfg["severity"], "mapping": mapping}
 
 
 @lru_cache(maxsize=1)
@@ -48,26 +55,42 @@ def _detect(photo_path: str) -> list[Detection]:
     result = model.predict(photo_path, conf=acfg["conf"], iou=acfg["iou"],
                            imgsz=acfg["imgsz"], device="cpu", verbose=False)[0]
     boxes = result.boxes
-    return [
-        (model.names[int(cls)], [round(v, 1) for v in xyxy], round(float(conf), 4))
-        for xyxy, conf, cls in zip(boxes.xyxy.tolist(), boxes.conf.tolist(),
-                                   boxes.cls.tolist(), strict=True)
-    ]
+    height, width = result.orig_shape
+    detections = []
+    for xyxy, conf, cls in zip(boxes.xyxy.tolist(), boxes.conf.tolist(),
+                               boxes.cls.tolist(), strict=True):
+        x1, y1, x2, y2 = xyxy
+        area_ratio = max(0.0, (x2 - x1) * (y2 - y1)) / float(width * height)
+        detections.append(Detection(model.names[int(cls)], [round(v, 1) for v in xyxy],
+                                    round(float(conf), 4), round(area_ratio, 4)))
+    return detections
 
 
-def _severity(class_names: list[str], mapping: dict) -> str:
-    """Provisional sprint-1 rule (refined in week 2).
+def _damage_points(det: Detection, info: dict, scfg: dict) -> int:
+    """Points of one damage: type + size + class hint (see config.yaml `severity`)."""
+    points = scfg["type_points"].get(info["damage_type"], scfg["default_type_points"])
+    points += next(b["points"] for b in scfg["size_points"] if det.area_ratio <= b["max_area"])
+    if info["severity_hint"]:
+        points += scfg["hint_points"][info["severity_hint"]]
+    return points
 
-    Start from the worst severity hint encoded in the class names (Minor/Medium/Major),
-    then escalate with the number of damages: >= 3 damages -> at least moderate,
-    >= 5 -> severe. No damage found -> "minor" (the decision agent sees an empty list).
+
+def _severity(detections: list[Detection], mapping: dict, scfg: dict) -> str:
+    """Claim severity from the number, type and size of damages (config.yaml `severity`).
+
+    Each damage scores type points (scratch < dent/crack < glass_shatter) + size points
+    (box area / image area) + hint points (Minor/Medium/Major in the class name).
+    The claim score is the sum over all damages, so more damages -> more severe.
+    With `hint_floor`, the result is never below the worst hint (Major -> severe).
+    No damage found -> "minor" (the decision agent also sees the empty list).
     """
-    hints = [mapping[c]["severity_hint"] for c in class_names if mapping[c]["severity_hint"]]
-    level = max((SEVERITY_ORDER.index(h) for h in hints), default=0)
-    if len(class_names) >= 5:
-        level = 2
-    elif len(class_names) >= 3:
-        level = max(level, 1)
+    infos = [mapping[d.class_name] for d in detections]
+    score = sum(_damage_points(d, i, scfg) for d, i in zip(detections, infos, strict=True))
+    thresholds = scfg["thresholds"]
+    level = 2 if score >= thresholds["severe"] else 1 if score >= thresholds["moderate"] else 0
+    if scfg.get("hint_floor"):
+        hints = [SEVERITY_ORDER.index(i["severity_hint"]) for i in infos if i["severity_hint"]]
+        level = max([level, *hints])
     return SEVERITY_ORDER[level]
 
 
@@ -75,7 +98,7 @@ def run(claim: ClaimInput) -> VisionResult:
     cfg = _config()
     mapping = cfg["mapping"]
     damages: list[Damage] = []
-    kept_classes: list[str] = []
+    kept: list[Detection] = []
 
     for photo in claim.photo_paths:
         if not Path(photo).is_file():
@@ -86,18 +109,19 @@ def run(claim: ClaimInput) -> VisionResult:
         except Exception:  # unreadable/corrupt image must not crash the whole claim
             logger.exception("claim %s: detection failed on %s", claim.claim_id, photo)
             continue
-        for class_name, bbox, conf in detections:
-            if class_name not in mapping:
-                logger.warning("claim %s: unmapped class %r ignored", claim.claim_id, class_name)
+        for det in detections:
+            if det.class_name not in mapping:
+                logger.warning("claim %s: unmapped class %r ignored", claim.claim_id,
+                               det.class_name)
                 continue
-            damages.append(Damage(part=mapping[class_name]["part"],
-                                  damage_type=mapping[class_name]["damage_type"],
-                                  bbox=bbox, confidence=conf))
-            kept_classes.append(class_name)
+            info = mapping[det.class_name]
+            damages.append(Damage(part=info["part"], damage_type=info["damage_type"],
+                                  bbox=det.bbox, confidence=det.confidence))
+            kept.append(det)
 
     return VisionResult(
         claim_id=claim.claim_id,
         damages=damages,
-        severity=_severity(kept_classes, mapping),
+        severity=_severity(kept, mapping, cfg["severity"]),
         model_version=cfg["agent"]["model_version"],
     )

@@ -1,0 +1,13 @@
+# Vision agent (Wiem) - heavy libs, NOT installed in CI (AGENTS.md section 6)
+# Install: pip install -r requirements-vision.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+ultralytics>=8.3,<9
+opencv-python-headless
+mlflow
+python-dotenv
+pyyaml
+pandas
+roboflow
+dvc[s3]
