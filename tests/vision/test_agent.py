@@ -27,6 +27,18 @@ def make_claim(paths: list[str]) -> ClaimInput:
                       policy_id="P-1")
 
 
+# Unit tests use the original 18-class mapping (its Minor/Medium/Major hints exercise the
+# whole severity rule), whatever model/mapping the agent is configured with.
+ORIGINAL_MAPPING = agent.yaml.safe_load(
+    (REPO_ROOT / "agents/vision/class_mapping.yaml").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(autouse=True)
+def original_mapping(monkeypatch):
+    cfg = {**agent._config(), "mapping": ORIGINAL_MAPPING}
+    monkeypatch.setattr(agent, "_config", lambda: cfg)
+
+
 def det(class_name: str, area: float = 0.05) -> Detection:
     return Detection(class_name, [10.0, 20.0, 110.0, 220.0], 0.9, area)
 
@@ -90,8 +102,8 @@ def test_small_scratch_is_minor():
 
 
 def test_size_matters():
-    assert severity(det("dent", 0.01)) == "minor"                         # 2 + 0 = 2
-    assert severity(det("dent", 0.01), det("dent", 0.15)) == "moderate"   # 2 + 4 = 6
+    assert severity(det("dent", 0.01)) == "minor"           # 2 + 0 = 2
+    assert severity(det("dent", 0.01), det("dent", 0.15)) == "moderate"  # 2 + 4 = 6
 
 
 def test_type_matters():
@@ -112,8 +124,9 @@ def test_class_hint_is_a_floor():
     assert severity(det("Major-scratch", 0.01)) == "severe"
 
 
-def test_run_on_real_test_image():
+def test_run_on_real_test_image(monkeypatch):
     """Integration test with the real weights and one test image (skipped if not pulled)."""
+    monkeypatch.undo()  # use the agent's real config (configured model + its mapping)
     pytest.importorskip("ultralytics")
     weights = REPO_ROOT / agent._config()["agent"]["weights"]
     images = sorted((REPO_ROOT / "data/vision/car_dent_scratch_split/test/images").glob("*.jpg"))
@@ -123,6 +136,7 @@ def test_run_on_real_test_image():
     result = agent.run(make_claim([str(images[0])]))
     assert isinstance(result, VisionResult)
     assert result.severity in {"minor", "moderate", "severe"}
+
 
 def test_merged_mapping_uses_shared_vocabulary():
     path = REPO_ROOT / "agents/vision/class_mapping_merged.yaml"

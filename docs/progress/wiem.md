@@ -17,3 +17,9 @@ Done: second training to compare (stretch 8): YOLOv8n 30 epochs, logged directly
 Metrics: yolov8n-e30 — test mAP50 = 0.199 (vs 0.183 baseline), mAP50-95 0.092, P 0.313, R 0.251. MLflow run id 7c062edcdbf94027b6484f220433c831. Longer training helps only slightly → the 18 severity-split classes are the main limit.
 Blocked by: review of PR #9 and #10 (this PR is built on top of them); claimspilot/schemas.py on main.
 Next: register yolov8n-e30 in the MLflow Model Registry (stretch 7); run the agent on 3 sample claim photos and share example VisionResult outputs with Hend and Mohamed.
+
+## 2026-11-09 (3) — Sprint 2
+Done: classes merged from 18 to 8 (one per part + damage type) with merge_classes.py, since Minor/Medium/Major variants of the same damage were the main source of confusion and severity is computed by the rule anyway; merged dataset versioned with DVC; train.py --merged option; YOLOv8n retrained on merged classes (30 epochs, CPU) and used by the agent (config: weights + class_mapping); registered as `claimspilot-vision-yolo` v2; tests made independent of the configured model.
+Metrics: yolov8n-merged-e30 — test mAP50 = 0.337 (vs 0.199 with 18 classes, +69%), mAP50-95 0.171, P 0.550, R 0.301. MLflow run id 5934a282b9ee484d8860ffd14349d674, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Note: 8-class mAP is an easier task than 18-class mAP, but it is exactly what the agent needs (part + damage type).
+Blocked by: review of PR #12; claimspilot/schemas.py on main; GPU access for YOLOv8s.
+Next: YOLOv8s on merged classes on a GPU (Colab), as advised by our supervisor; propose the human-in-the-loop design at the Sunday checkpoint.
