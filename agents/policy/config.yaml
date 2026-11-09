@@ -1,0 +1,26 @@
+# Policy agent configuration
+raw_dir: data/policy/raw
+clauses_file: data/policy/processed/clauses.jsonl
+chroma_dir: data/policy/chroma
+collection: policy_clauses
+embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+max_chunk_chars: 1500
+top_k: 4
+
+# One entry per insurer: which PDF, where the real text starts (after the
+# table of contents), and how its section titles are written.
+insurers:
+  AXA:
+    file: AXA.pdf
+    start_page: 5
+    style: articles        # "Article 15 : Dommages collision"
+  SANLAM:
+    file: SANLAM.pdf
+    start_page: 8
+    end_page: 35           # annexes after this page are tariff tables
+    style: risks           # "5. Risque R7 : Dommages collision" + "5.1. Objet de la garantie"
+
+# "Conditions particulieres": which guarantees each formula includes.
+formulas:
+  TIERS: [rc, defense_recours]
+  TR: [rc, defense_recours, tous_risques, collision, bris_de_glace, incendie, vol, vandalisme]

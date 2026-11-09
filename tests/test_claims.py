@@ -50,3 +50,10 @@ def test_severe_damage_goes_to_human():
     claim, vision, nlp, policy = _results()
     vision.severity = "severe"
     assert decide(claim, vision, nlp, policy).decision == "human_review"
+
+def test_analyze_returns_every_agent_result():
+    response = client.post("/claims/analyze", json=CLAIM)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"vision", "nlp", "policy", "decision", "agents"}
+    assert set(body["agents"]) == {"vision", "nlp", "policy", "decision"}
