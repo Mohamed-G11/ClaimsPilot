@@ -4,7 +4,7 @@ Usage (from the repo root, venv activated, .env filled with DagsHub credentials)
     python -m agents.vision.train                                   # baseline (config.yaml)
     python -m agents.vision.train --smoke                           # 1 epoch on 10% of train
     python -m agents.vision.train --epochs 30 --name yolov8n-e30    # second training
-    python -m agents.vision.train --model yolov8s.pt --name yolov8s # bigger model
+    python -m agents.vision.train --merged --epochs 30 --name yolov8n-merged-e30
 
 Env vars (read from .env):
     MLFLOW_TRACKING_URI   shared DagsHub MLflow (AGENTS.md section 6)
@@ -56,18 +56,23 @@ def main() -> None:
     parser.add_argument("--smoke", action="store_true", help="1 epoch on 10%% of train")
     parser.add_argument("--epochs", type=int, help="override config epochs")
     parser.add_argument("--model", help="override base model, e.g. yolov8s.pt")
+    parser.add_argument("--merged", action="store_true",
+                        help="train on the merged (part, damage_type) dataset, see merge_classes.py")
     parser.add_argument("--name", default="yolov8n-baseline",
                         help="run name; weights exported to models/vision/<name_with_underscores>.pt")
     args = parser.parse_args()
 
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     tcfg, mcfg = cfg["train"], cfg["mlflow"]
-    data_dir = Path(cfg["split"]["output_dir"]).resolve()
+    data_cfg = cfg["merged"] if args.merged else cfg["split"]
+    data_dir = Path(data_cfg["output_dir"]).resolve()
+    class_mapping = cfg["merged"]["class_mapping"] if args.merged else cfg["class_mapping"]
     data_yaml = data_dir / "data.yaml"
     epochs = 1 if args.smoke else (args.epochs or tcfg["epochs"])
     fraction = 0.1 if args.smoke else 1.0
     run_name = "yolov8n-smoke" if args.smoke else args.name
     base_model = args.model or tcfg["base_model"]
+
 
     # We log to MLflow ourselves (required tags); disable Ultralytics' own MLflow callback.
     settings.update({"mlflow": False})
@@ -89,6 +94,7 @@ def main() -> None:
             "dataset": f"{cfg['dataset']['workspace']}/{cfg['dataset']['project']}"
                        f"@v{cfg['dataset']['version']}",
             "split_seed": cfg["split"]["seed"],
+            "classes": "merged" if args.merged else "original",
         }
         mlflow.log_params(params)
 
@@ -129,7 +135,7 @@ def main() -> None:
         # Artifacts: weights, configs, curves, confusion matrices.
         mlflow.log_artifact(str(best), artifact_path="model")
         mlflow.log_artifact(str(CONFIG_PATH), artifact_path="config")
-        mlflow.log_artifact(cfg["class_mapping"], artifact_path="config")
+        mlflow.log_artifact(class_mapping, artifact_path="config")
         for f in [results_csv, *save_dir.glob("*.png"), *(save_dir / "test").glob("*.png")]:
             if f.exists():
                 mlflow.log_artifact(str(f), artifact_path="plots")

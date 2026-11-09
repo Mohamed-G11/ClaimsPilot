@@ -1,0 +1,6 @@
+outs:
+- md5: 1c1798c74763dece81ee8a5cc6a2d8ee.dir
+  size: 354483188
+  nfiles: 4813
+  hash: md5
+  path: car_dent_scratch_merged

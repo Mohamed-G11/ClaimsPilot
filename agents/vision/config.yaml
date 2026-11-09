@@ -11,6 +11,9 @@ split:
   ratios: {train: 0.7, valid: 0.15, test: 0.15}
   seed: 42
 class_mapping: agents/vision/class_mapping.yaml
+merged:                            # 1 class per (part, damage_type) -> see merge_classes.py
+  output_dir: data/vision/car_dent_scratch_merged   # DVC-tracked
+  class_mapping: agents/vision/class_mapping_merged.yaml
 train:
   base_model: yolov8n.pt           # COCO-pretrained, downloaded by Ultralytics
   epochs: 20

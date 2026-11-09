@@ -33,7 +33,10 @@ class Detection(NamedTuple):
 @lru_cache(maxsize=1)
 def _config() -> dict:
     cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    mapping = yaml.safe_load(Path(cfg["class_mapping"]).read_text(encoding="utf-8"))
+    # The model's classes decide the mapping: agent.class_mapping (e.g. merged classes)
+    # if set, else the original 18-class mapping.
+    mapping_path = cfg["agent"].get("class_mapping", cfg["class_mapping"])
+    mapping = yaml.safe_load(Path(mapping_path).read_text(encoding="utf-8"))
     return {"agent": cfg["agent"], "severity": cfg["severity"], "mapping": mapping}
 
 

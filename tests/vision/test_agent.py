@@ -123,3 +123,11 @@ def test_run_on_real_test_image():
     result = agent.run(make_claim([str(images[0])]))
     assert isinstance(result, VisionResult)
     assert result.severity in {"minor", "moderate", "severe"}
+
+def test_merged_mapping_uses_shared_vocabulary():
+    path = REPO_ROOT / "agents/vision/class_mapping_merged.yaml"
+    if not path.exists():
+        pytest.skip("merged mapping not generated (python -m agents.vision.merge_classes)")
+    mapping = agent.yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert len(mapping) == 8
+    assert {info["part"] for info in mapping.values()} <= SHARED_PARTS
