@@ -1,0 +1,18 @@
+{
+  "claim_id": "DEMO-002",
+  "damages": [
+    {
+      "part": "headlight",
+      "damage_type": "crack",
+      "bbox": [
+        33.2,
+        39.4,
+        631.7,
+        539.7
+      ],
+      "confidence": 0.2773
+    }
+  ],
+  "severity": "moderate",
+  "model_version": "yolov8n-e30@7c062edcdbf94027b6484f220433c831"
+}

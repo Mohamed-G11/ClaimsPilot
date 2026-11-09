@@ -74,6 +74,15 @@ def test_unreadable_photo_does_not_crash(monkeypatch, photo):
     assert result.damages == []
 
 
+def test_missing_weights_fail_loudly(monkeypatch, photo):
+    def no_weights(_path):
+        raise FileNotFoundError("Vision weights not found")
+
+    monkeypatch.setattr(agent, "_detect", no_weights)
+    with pytest.raises(FileNotFoundError):
+        agent.run(make_claim([photo]))
+
+
 def test_unmapped_class_is_ignored(monkeypatch, photo):
     monkeypatch.setattr(agent, "_detect", lambda _path: [det("car")])
     assert agent.run(make_claim([photo])).damages == []
@@ -90,8 +99,8 @@ def test_small_scratch_is_minor():
 
 
 def test_size_matters():
-    assert severity(det("dent", 0.01)) == "minor"                         # 2 + 0 = 2
-    assert severity(det("dent", 0.01), det("dent", 0.15)) == "moderate"   # 2 + 4 = 6
+    assert severity(det("dent", 0.01)) == "minor"           # 2 + 0 = 2
+    assert severity(det("dent", 0.01), det("dent", 0.15)) == "moderate"  # 2 + 4 = 6
 
 
 def test_type_matters():

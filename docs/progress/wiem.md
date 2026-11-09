@@ -17,3 +17,9 @@ Done: second training to compare (stretch 8): YOLOv8n 30 epochs, logged directly
 Metrics: yolov8n-e30 — test mAP50 = 0.199 (vs 0.183 baseline), mAP50-95 0.092, P 0.313, R 0.251. MLflow run id 7c062edcdbf94027b6484f220433c831. Longer training helps only slightly → the 18 severity-split classes are the main limit.
 Blocked by: review of PR #9 and #10 (this PR is built on top of them); claimspilot/schemas.py on main.
 Next: register yolov8n-e30 in the MLflow Model Registry (stretch 7); run the agent on 3 sample claim photos and share example VisionResult outputs with Hend and Mohamed.
+
+## 2026-11-09 (2) — Sprint 2
+Done: yolov8n-e30 registered in the MLflow Model Registry as `claimspilot-vision-yolo` v1 (stretch 7); demo script runs the agent on 3 test photos and saves real VisionResult JSON examples in agents/vision/examples/ for the NLP / policy / decision agents; missing weights now fail loudly instead of returning "no damage" (+ test).
+Metrics: demo on 3 photos → 2 correct detections (headlight/crack 0.28, rear_bumper/dent 0.40), 1 missed damage (taillight, empty result) — consistent with recall 0.25. 13 vision tests passing.
+Blocked by: review of PRs #9 → #10 → #11 (this PR is built on top of them).
+Next: share the example VisionResults with Hend and Mohamed; if time allows, one more training with merged classes (part + damage type) to improve recall.
