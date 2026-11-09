@@ -115,7 +115,7 @@ def test_class_hint_is_a_floor():
 def test_run_on_real_test_image():
     """Integration test with the real weights and one test image (skipped if not pulled)."""
     pytest.importorskip("ultralytics")
-    weights = REPO_ROOT / "models/vision/yolov8n_baseline.pt"
+    weights = REPO_ROOT / agent._config()["agent"]["weights"]
     images = sorted((REPO_ROOT / "data/vision/car_dent_scratch_split/test/images").glob("*.jpg"))
     if not weights.exists() or not images:
         pytest.skip("weights or test images not available (run `dvc pull`)")
