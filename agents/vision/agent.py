@@ -109,6 +109,8 @@ def run(claim: ClaimInput) -> VisionResult:
             continue
         try:
             detections = _detect(photo)
+        except FileNotFoundError:  # missing weights = configuration error: fail loudly
+            raise
         except Exception:  # unreadable/corrupt image must not crash the whole claim
             logger.exception("claim %s: detection failed on %s", claim.claim_id, photo)
             continue
