@@ -35,10 +35,13 @@ PART_KEYWORDS = {
     "rear bumper",
     "back bumper",
 ],
+    
     "door": [
-        "portière", "portiere", "porte de mon véhicule",
-        "porte du véhicule", "car door", "my door", "side door",
+     "portière", "portiere", "porte de mon véhicule",
+     "porte du véhicule", "car door", "my door",
+     "side door", "door",
     ],
+
     "hood": [
         "capot", "capot moteur", "hood", "bonnet",
     ],
