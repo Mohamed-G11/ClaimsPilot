@@ -29,3 +29,9 @@ Done: classes merged from 18 to 8 (one per part + damage type) with merge_classe
 Metrics: yolov8n-merged-e30 — test mAP50 = 0.337 (vs 0.199 with 18 classes, +69%), mAP50-95 0.171, P 0.550, R 0.301. MLflow run id 5934a282b9ee484d8860ffd14349d674, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Note: 8-class mAP is an easier task than 18-class mAP, but it is exactly what the agent needs (part + damage type).
 Blocked by: claimspilot/schemas.py on main; GPU access for YOLOv8s.
 Next: YOLOv8s on merged classes on a GPU (Colab), as advised by our supervisor; propose the human-in-the-loop design at the Sunday checkpoint.
+
+## 2026-11-10 — Sprint 2
+Done: YOLOv8s trained on the 8 merged classes (stretch 8, advised by our supervisor) on a Colab T4 GPU with the same script and tracking (new --device option, CPU stays the default); weights versioned with DVC and used by the agent; registered as `claimspilot-vision-yolo` v3 (recall improved).
+Metrics: yolov8s-merged-e30 — test mAP50 = 0.385 (vs 0.337 for yolov8n-merged-e30), mAP50-95 0.184, P 0.627, R 0.364. MLflow run id cca12ea8faa14ca296938b96ee276c84, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Overall: mAP50 0.183 (baseline) → 0.385.
+Blocked by: none.
+Next: regenerate the example VisionResults with YOLOv8s; measure CPU inference time for the API; decision agent (LangGraph) in sprint 3.
