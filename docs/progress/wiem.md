@@ -23,3 +23,9 @@ Done: yolov8n-e30 registered in the MLflow Model Registry as `claimspilot-vision
 Metrics: demo on 3 photos → 2 correct detections (headlight/crack 0.28, rear_bumper/dent 0.40), 1 missed damage (taillight, empty result) — consistent with recall 0.25. 13 vision tests passing.
 Blocked by: review of PRs #9 → #10 → #11 (this PR is built on top of them).
 Next: share the example VisionResults with Hend and Mohamed; if time allows, one more training with merged classes (part + damage type) to improve recall.
+
+## 2026-11-09 (3) — Sprint 2
+Done: classes merged from 18 to 8 (one per part + damage type) with merge_classes.py, since Minor/Medium/Major variants of the same damage were the main source of confusion and severity is computed by the rule anyway; merged dataset versioned with DVC; train.py --merged option; YOLOv8n retrained on merged classes (30 epochs, CPU) and used by the agent (config: weights + class_mapping); registered as `claimspilot-vision-yolo` v2; tests made independent of the configured model.
+Metrics: yolov8n-merged-e30 — test mAP50 = 0.337 (vs 0.199 with 18 classes, +69%), mAP50-95 0.171, P 0.550, R 0.301. MLflow run id 5934a282b9ee484d8860ffd14349d674, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Note: 8-class mAP is an easier task than 18-class mAP, but it is exactly what the agent needs (part + damage type).
+Blocked by: claimspilot/schemas.py on main; GPU access for YOLOv8s.
+Next: YOLOv8s on merged classes on a GPU (Colab), as advised by our supervisor; propose the human-in-the-loop design at the Sunday checkpoint.
