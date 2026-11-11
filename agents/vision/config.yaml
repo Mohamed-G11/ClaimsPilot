@@ -29,12 +29,12 @@ mlflow:
   owner: wiem
   sprint: "2"
 agent:
-  weights: models/vision/yolov8n_merged_e30.pt   # best model so far (DVC-tracked, dvc pull)
+  weights: models/vision/yolov8s_merged_e30.pt   # best model so far (DVC-tracked, dvc pull)
   class_mapping: agents/vision/class_mapping_merged.yaml   # mapping of the model's 8 classes
   conf: 0.25                       # min confidence to keep a detection
   iou: 0.5                         # NMS IoU threshold
   imgsz: 640
-  model_version: yolov8n-merged-e30@5934a282b9ee484d8860ffd14349d674   # MLflow run id (DagsHub)
+  model_version: yolov8s-merged-e30@cca12ea8faa14ca296938b96ee276c84   # MLflow run id (DagsHub)
 severity:
   # Claim severity = points summed over all damages, then mapped with `thresholds`.
   # Points per damage = type_points[damage_type] + size points (box area / image area)

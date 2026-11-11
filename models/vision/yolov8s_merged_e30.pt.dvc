@@ -1,0 +1,5 @@
+outs:
+- md5: c9ea77048af8b7956029cda15d0ef254
+  size: 22522666
+  hash: md5
+  path: yolov8s_merged_e30.pt

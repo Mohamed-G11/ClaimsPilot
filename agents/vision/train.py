@@ -56,6 +56,8 @@ def main() -> None:
     parser.add_argument("--smoke", action="store_true", help="1 epoch on 10%% of train")
     parser.add_argument("--epochs", type=int, help="override config epochs")
     parser.add_argument("--model", help="override base model, e.g. yolov8s.pt")
+    parser.add_argument("--device", default="cpu",
+                        help="cpu (default, AGENTS.md) or a GPU index such as 0 (e.g. on Colab)")
     parser.add_argument("--merged", action="store_true",
                         help="train on the merged (part, damage_type) dataset, see merge_classes.py")
     parser.add_argument("--name", default="yolov8n-baseline",
@@ -102,7 +104,7 @@ def main() -> None:
         model.train(
             data=str(data_yaml), epochs=epochs, imgsz=tcfg["imgsz"], batch=tcfg["batch"],
             workers=tcfg["workers"], patience=tcfg["patience"], seed=tcfg["seed"],
-            fraction=fraction, device="cpu", project=str(Path(tcfg["runs_dir"]).resolve()),
+            fraction=fraction,  device=args.device, project=str(Path(tcfg["runs_dir"]).resolve()),
             name=run_name, exist_ok=True, plots=True, verbose=False,
         )
         save_dir = Path(model.trainer.save_dir)
@@ -122,7 +124,7 @@ def main() -> None:
 
         # Final evaluation of the best weights on the held-out test split.
         test = YOLO(str(best)).val(data=str(data_yaml), split="test", imgsz=tcfg["imgsz"],
-                                   batch=tcfg["batch"], device="cpu", plots=True,
+                                   batch=tcfg["batch"],  device=args.device, plots=True,
                                    project=str(save_dir), name="test", exist_ok=True)
         metrics = {
             "test_mAP50": float(test.box.map50),
