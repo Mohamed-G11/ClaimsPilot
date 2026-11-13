@@ -1,0 +1,4 @@
+# Streamlit claims page (Wiem) - NOT installed in CI (AGENTS.md section 6)
+# Install: pip install -r requirements-ui.txt
+streamlit
+httpx
