@@ -35,3 +35,9 @@ Done: YOLOv8s trained on the 8 merged classes (stretch 8, advised by our supervi
 Metrics: yolov8s-merged-e30 — test mAP50 = 0.385 (vs 0.337 for yolov8n-merged-e30), mAP50-95 0.184, P 0.627, R 0.364. MLflow run id cca12ea8faa14ca296938b96ee276c84, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Overall: mAP50 0.183 (baseline) → 0.385.
 Blocked by: none.
 Next: regenerate the example VisionResults with YOLOv8s; measure CPU inference time for the API; decision agent (LangGraph) in sprint 3.
+
+## 2026-11-13 — Sprint 2 (decision agent, started early)
+Done: decision agent in agents/decision/: LangGraph graph vision → nlp → policy → decide with a shared state; run(claim, vision, nlp, policy) -> Decision (AGENTS.md contract) + process_claim() for the full chain (real agents or stubs); rules from api/pipeline.py decide() extended and configurable in config.yaml (reject if not covered; human_review if coverage unknown, inconsistent text, low NLP score, severe damage, no damage detected or low vision confidence; else approve), with clear Decision.reasons; stubs for NLP / policy + the vision examples; requirements-decision.txt (langgraph). Also measured vision CPU inference: ≈ 13 s at startup (load + warm-up), then 0.28 s per photo.
+Metrics: 16 decision tests (13 rule tests run in CI without LangGraph; 3 graph tests skipped when langgraph is not installed); 49 tests passing in the repo. Demo on the 3 vision examples: 001 → human_review (no damage), 002 → human_review (vision confidence 0.28), 003 → approve.
+Blocked by: real policy agent (stub used meanwhile); Mohamed to plug run() into api/pipeline.py.
+Next: sprint 2 checkpoint (Sunday); Langfuse trace_id and human-in-the-loop with the Streamlit page in sprint 3.
