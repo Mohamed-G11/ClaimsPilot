@@ -1,0 +1,15 @@
+# Decision agent configuration (AGENTS.md section 4: run(claim, vision, nlp, policy) -> Decision).
+# Rules are applied in this priority order: reject > human_review > approve.
+rules:
+  reject_if_not_covered: true        # policy.covered is False -> reject
+  review_if_coverage_unknown: true   # policy.covered is None  -> human_review
+  review_if_inconsistent: true       # nlp.consistency == "inconsistent" -> human_review
+  review_if_uncertain: false         # nlp.consistency == "uncertain"    -> human_review
+  min_nlp_score: 0.5                 # nlp.score below -> human_review
+  review_severities: [severe]        # vision.severity in this list -> human_review
+  review_if_no_damage: true          # vision found nothing (low recall) -> human_review
+  min_vision_confidence: 0.30        # mean damage confidence below -> human_review
+confidence:                          # Decision.confidence per outcome
+  reject: 0.8
+  human_review: 0.5
+  approve_max: 0.9                   # approve -> min(nlp.score, mean vision confidence, approve_max)
