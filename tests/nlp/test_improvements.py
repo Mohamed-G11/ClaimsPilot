@@ -78,3 +78,12 @@ def test_invalid_thresholds():
             consistent_threshold=0.2,
             inconsistent_threshold=0.8,
         )
+def test_front_light_synonym():
+    from agents.nlp.agent import extract_damaged_parts
+
+    text = (
+        "After an accident in a parking lot, "
+        "the front light was damaged."
+    )
+
+    assert extract_damaged_parts(text) == ["headlight"]

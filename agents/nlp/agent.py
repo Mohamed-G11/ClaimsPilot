@@ -69,11 +69,12 @@ PART_KEYWORDS = {
         "wing panel",
     ],
     "headlight": [
-        "phare",
-        "feu avant",
-        "headlight",
-        "headlamp",
-        "front lamp",
+    "phare",
+    "feu avant",
+    "headlight",
+    "headlamp",
+    "front lamp",
+    "front light",
     ],
     "taillight": [
         "feu arrière",
