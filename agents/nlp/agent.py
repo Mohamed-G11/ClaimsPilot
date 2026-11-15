@@ -189,11 +189,17 @@ def extract_damaged_parts(text: str) -> list[str]:
     return detected
 
 
+
 def check_consistency(
     described_parts: list[str],
     vision_parts: list[str],
+    consistent_threshold: float = 0.8,
+    inconsistent_threshold: float = 0.2,
 ) -> str:
-    """Compare text and vision parts with partial-match tolerance."""
+    """Classify consistency using configurable Jaccard overlap."""
+
+    if not 0 <= inconsistent_threshold < consistent_threshold <= 1:
+        raise ValueError("Invalid consistency thresholds")
 
     described = set(described_parts) - {"other"}
     detected = set(vision_parts) - {"other"}
@@ -201,15 +207,16 @@ def check_consistency(
     if not described or not detected:
         return "uncertain"
 
-    overlap = described & detected
+    overlap = len(described & detected) / len(described | detected)
 
-    if not overlap:
-        return "inconsistent"
-
-    if described == detected:
+    if overlap >= consistent_threshold:
         return "consistent"
 
+    if overlap <= inconsistent_threshold:
+        return "inconsistent"
+
     return "uncertain"
+
 
 
 def analyze_claim(text: str, vision_parts: list[str]) -> dict:

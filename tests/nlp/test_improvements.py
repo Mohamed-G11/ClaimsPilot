@@ -45,3 +45,36 @@ def test_multiple_parts():
 )
 def test_consistency_basic_cases(described, vision, expected):
     assert check_consistency(described, vision) == expected
+
+def test_configurable_thresholds():
+    described = ["hood", "door", "wheel"]
+    vision = ["hood", "door"]
+
+    assert check_consistency(
+        described, vision
+    ) == "uncertain"
+
+    assert check_consistency(
+        described,
+        vision,
+        consistent_threshold=0.6,
+    ) == "consistent"
+
+
+def test_low_overlap_threshold():
+    described = ["hood", "door", "wheel"]
+    vision = ["hood", "headlight", "trunk"]
+
+    assert check_consistency(
+        described, vision
+    ) == "inconsistent"
+
+
+def test_invalid_thresholds():
+    with pytest.raises(ValueError):
+        check_consistency(
+            ["hood"],
+            ["hood"],
+            consistent_threshold=0.2,
+            inconsistent_threshold=0.8,
+        )
