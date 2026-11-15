@@ -35,3 +35,9 @@ Done: YOLOv8s trained on the 8 merged classes (stretch 8, advised by our supervi
 Metrics: yolov8s-merged-e30 — test mAP50 = 0.385 (vs 0.337 for yolov8n-merged-e30), mAP50-95 0.184, P 0.627, R 0.364. MLflow run id cca12ea8faa14ca296938b96ee276c84, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Overall: mAP50 0.183 (baseline) → 0.385.
 Blocked by: none.
 Next: regenerate the example VisionResults with YOLOv8s; measure CPU inference time for the API; decision agent (LangGraph) in sprint 3.
+
+## 2026-11-13 — Sprint 3 (started early)
+Done: Streamlit claims page in ui/app.py (AGENTS.md stretch): form with claim text, policy number, language and photos (upload or test photos from the dataset); sends the claim to POST /claims and shows the decision badge, confidence, reasons, Langfuse trace id (when present) and photos; API health check; API URL and upload folder configurable by env vars; requirements-ui.txt (streamlit, httpx). Tested end to end with the API (stub agents).
+Metrics: n/a (UI).
+Blocked by: real agents plugged into api/pipeline.py (Mohamed); the API takes photo paths, so uploads must be saved on the same machine or a shared docker volume (an upload endpoint could be added later).
+Next: sprint 2 checkpoint (Sunday); human-in-the-loop view for human_review claims if the team agrees.
