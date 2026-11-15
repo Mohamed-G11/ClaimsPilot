@@ -4,6 +4,7 @@ import csv
 import json
 import tempfile
 from pathlib import Path
+import re
 
 import mlflow
 from sklearn.metrics import (
@@ -21,11 +22,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_parts(value):
+    """Split vehicle parts separated by | or ;."""
     if not value:
         return []
+
     return [
         part.strip()
-        for part in value.split(";")
+        for part in re.split(r"[|;]", value)
         if part.strip()
     ]
 
