@@ -53,10 +53,10 @@ def build_query(claim: ClaimInput, vision: VisionResult) -> str:
 
 def retrieve(query: str, insurer: str, guarantees: list[str], k: int) -> list[dict]:
     """Top-k clauses of this insurer, among the clauses of these guarantees."""
-    from agents.policy.index import collection, embed
+    from agents.policy.index import embed, ready_collection
 
     where = {"$and": [{"insurer": insurer}, {"guarantee": {"$in": guarantees}}]}
-    result = collection().query(query_embeddings=embed([query]), n_results=k, where=where)
+    result = ready_collection().query(query_embeddings=embed([query]), n_results=k, where=where)
     return [
         {"clause_id": cid, "text": doc, "relevance": round(1 - dist, 3), **meta}
         for cid, doc, dist, meta in zip(result["ids"][0], result["documents"][0],

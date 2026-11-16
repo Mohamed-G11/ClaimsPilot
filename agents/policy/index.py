@@ -32,6 +32,20 @@ def collection():
                                            metadata={"hnsw:space": "cosine"})
 
 
+class EmptyIndexError(RuntimeError):
+    """The Chroma index has no clause: it was never built on this machine."""
+
+
+def ready_collection():
+    """The collection, or a clear error when it is empty (instead of silent empty answers)."""
+    col = collection()
+    if col.count() == 0:
+        raise EmptyIndexError(
+            f"The policy index in {data_path('chroma_dir')} is empty. Build it with: "
+            "dvc pull data/policy/processed.dvc ; python -m agents.policy.index")
+    return col
+
+
 def load_clauses() -> list[dict]:
     path = data_path("clauses_file")
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]

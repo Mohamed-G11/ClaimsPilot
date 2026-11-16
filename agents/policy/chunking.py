@@ -29,6 +29,8 @@ HEADINGS = {
 }
 
 # Which guarantee a clause belongs to, from words in its title (order matters).
+# The words are matched as WHOLE words: "vol" matches "Vol du véhicule" but not
+# "volant". A final "s" is accepted ("bris de glaces", "franchises").
 GUARANTEES = [
     ("bris de glace", "bris_de_glace"),
     ("collision", "collision"),
@@ -50,10 +52,15 @@ def _plain(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c))
 
 
+def has_words(words: str, plain_text: str) -> bool:
+    """True if `words` appears in `plain_text` as whole words (optional plural s)."""
+    return re.search(rf"(?<!\w){re.escape(words)}s?(?!\w)", plain_text) is not None
+
+
 def guarantee_of(title: str) -> str:
     plain = _plain(title)
-    for word, guarantee in GUARANTEES:
-        if word in plain:
+    for words, guarantee in GUARANTEES:
+        if has_words(words, plain):
             return guarantee
     return "general"
 
