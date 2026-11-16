@@ -4,6 +4,7 @@ Each agent is called for real when it is available (code merged, libraries
 installed, model files pulled with DVC). Otherwise the pipeline falls back to a
 STUB returning a fixed example in the shared format, and says so in `agents`.
 """
+import importlib.util
 import logging
 
 from pydantic import BaseModel
@@ -17,6 +18,8 @@ from claimspilot.schemas import (
     PolicyResult,
     VisionResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def vision_stub(claim: ClaimInput) -> VisionResult:
@@ -88,9 +91,6 @@ def decide(claim: ClaimInput, vision: VisionResult, nlp: NLPResult,
                     confidence=confidence, reasons=reasons)
 
 
-logger = logging.getLogger(__name__)
-
-
 class ClaimAnalysis(BaseModel):
     """Everything the pipeline produced for one claim (used by the UI)."""
 
@@ -102,39 +102,21 @@ class ClaimAnalysis(BaseModel):
 
 
 def vision_real(claim: ClaimInput) -> VisionResult:
-    import importlib.util
-    import os
-    from pathlib import Path
-
-    from agents.vision.agent import _config, run
-
-    # Wiem's agent skips photos it cannot analyse, so check its requirements first.
+    """Wiem's agent. It skips a photo when detection fails, so a missing library
+    would look like "no damage": check the library first. Missing weights are
+    reported by the agent itself (FileNotFoundError)."""
     if importlib.util.find_spec("ultralytics") is None:
         raise ImportError("ultralytics not installed (pip install -r requirements-vision.txt)")
-    weights = Path(os.getenv("VISION_WEIGHTS", _config()["agent"]["weights"]))
-    if not weights.exists():
-        raise FileNotFoundError(f"{weights} missing (dvc pull)")
+    from agents.vision.agent import run
+
     return run(claim)
 
 
 def nlp_real(claim: ClaimInput, vision: VisionResult) -> NLPResult:
-    """Hend's agent: her run() if it exists, else her keyword extraction + overlap rule."""
-    from agents.nlp import agent as nlp_agent
+    """Hend's agent."""
+    from agents.nlp.agent import run
 
-    if hasattr(nlp_agent, "run"):
-        return nlp_agent.run(claim, vision)
-    described = nlp_agent.extract_damaged_parts(claim.text)
-    seen = {d.part for d in vision.damages}
-    if not described or not seen:
-        consistency, score = "uncertain", 0.5
-    else:
-        score = len(set(described) & seen) / len(set(described))
-        consistency = ("consistent" if score == 1 else
-                       "inconsistent" if score == 0 else "uncertain")
-    return NLPResult(claim_id=claim.claim_id, described_parts=described,
-                     consistency=consistency, score=round(score, 2),
-                     model_version="nlp-keywords-v1")
-
+    return run(claim, vision)
 
 def policy_real(claim: ClaimInput, vision: VisionResult) -> PolicyResult:
     from agents.policy.agent import run
