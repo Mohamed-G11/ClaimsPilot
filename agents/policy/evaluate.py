@@ -55,7 +55,7 @@ def to_inputs(case: dict) -> tuple[ClaimInput, VisionResult]:
     return claim, vision
 
 
-def evaluate(cases: list[dict], retriever=agent.retrieve, generator=None) -> dict:
+def evaluate(cases: list[dict], retriever=None, generator=None) -> dict:
     """Run the agent on every case. Returns {"metrics": {...}, "rows": [...]}."""
     rows = []
     for case in cases:

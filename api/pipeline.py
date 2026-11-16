@@ -101,11 +101,16 @@ class ClaimAnalysis(BaseModel):
     agents: dict[str, str]  # agent -> "real" or "stub (reason)"
 
 
+def _has_library(name: str) -> bool:
+    """Is this Python package installed? (does not import it)"""
+    return importlib.util.find_spec(name) is not None
+
+
 def vision_real(claim: ClaimInput) -> VisionResult:
     """Wiem's agent. It skips a photo when detection fails, so a missing library
     would look like "no damage": check the library first. Missing weights are
     reported by the agent itself (FileNotFoundError)."""
-    if importlib.util.find_spec("ultralytics") is None:
+    if not _has_library("ultralytics"):
         raise ImportError("ultralytics not installed (pip install -r requirements-vision.txt)")
     from agents.vision.agent import run
 
