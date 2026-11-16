@@ -1,9 +1,13 @@
+import os
+
 from fastapi import FastAPI
 
 from api.pipeline import ClaimAnalysis, analyze_claim, process_claim
 from claimspilot.schemas import ClaimInput, Decision
 
-app = FastAPI(title="ClaimsPilot API", version="0.3.0")
+API_VERSION = os.getenv("CLAIMSPILOT_VERSION", "0.3.0")   # set by Docker / CI at release time
+
+app = FastAPI(title="ClaimsPilot API", version=API_VERSION)
 
 
 @app.get("/health")
