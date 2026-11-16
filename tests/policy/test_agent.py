@@ -47,5 +47,18 @@ def test_glass_damage_needs_glass_guarantee_first():
     assert needed[0] == "bris_de_glace"
 
 
+def test_query_has_the_claim_text_and_the_damages_in_french():
+    query = agent.build_query(claim("AXA-TR"), vision(("windshield", "crack"),
+                                                     ("rear_bumper", "dent")))
+    assert query.startswith("Pare-chocs avant enfoncé.")
+    assert "fissure pare-brise" in query
+    assert "pare-chocs arrière" in query
+
+
+def test_query_keeps_unknown_words_as_they_are():
+    query = agent.build_query(claim("AXA-TR"), vision(("roof", "hole")))
+    assert "hole roof" in query
+
+
 def test_policy_id_parsing():
     assert agent.parse_policy_id("sanlam-tr") == ("SANLAM", "TR")
