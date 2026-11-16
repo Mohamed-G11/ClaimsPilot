@@ -51,6 +51,42 @@ def test_severe_damage_goes_to_human():
     vision.severity = "severe"
     assert decide(claim, vision, nlp, policy).decision == "human_review"
 
+
+def test_all_good_and_all_real_is_approved():
+    claim, vision, nlp, policy = _results()
+    result = decide(claim, vision, nlp, policy, stubs=[])
+    assert result.decision == "approve"
+    assert result.confidence == 0.9
+
+
+def test_uncertain_text_goes_to_human_never_approve():
+    claim, vision, nlp, policy = _results()
+    nlp.consistency, nlp.score = "uncertain", 0.0
+    result = decide(claim, vision, nlp, policy)
+    assert result.decision == "human_review"
+    assert any("uncertain" in reason for reason in result.reasons)
+
+
+def test_unknown_coverage_goes_to_human():
+    claim, vision, nlp, policy = _results()
+    policy.covered = None
+    assert decide(claim, vision, nlp, policy).decision == "human_review"
+
+
+def test_any_stub_goes_to_human_and_reasons_name_the_stubs():
+    claim, vision, nlp, policy = _results()
+    result = decide(claim, vision, nlp, policy, stubs=["vision", "policy"])
+    assert result.decision == "human_review"
+    assert "vision" in result.reasons[0] and "policy" in result.reasons[0]
+    assert "nlp" not in result.reasons[0]
+
+
+def test_stub_wins_over_reject():
+    claim, vision, nlp, policy = _results()
+    policy.covered = False                      # invented by a stub: not a reason to reject
+    assert decide(claim, vision, nlp, policy, stubs=["policy"]).decision == "human_review"
+
+
 def test_analyze_returns_every_agent_result():
     response = client.post("/claims/analyze", json=CLAIM)
     assert response.status_code == 200
