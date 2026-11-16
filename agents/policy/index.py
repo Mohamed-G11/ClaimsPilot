@@ -6,11 +6,8 @@ Output: data/policy/chroma/                   (local vector database, rebuilt an
 """
 import json
 from functools import lru_cache
-from pathlib import Path
 
-import yaml
-
-CONFIG = yaml.safe_load(Path("agents/policy/config.yaml").read_text(encoding="utf-8"))
+from agents.policy.settings import CONFIG, data_path
 
 
 @lru_cache(maxsize=1)
@@ -30,13 +27,13 @@ def collection():
     """The Chroma collection holding all clauses of all insurers."""
     import chromadb
 
-    client = chromadb.PersistentClient(path=CONFIG["chroma_dir"])
+    client = chromadb.PersistentClient(path=str(data_path("chroma_dir")))
     return client.get_or_create_collection(CONFIG["collection"],
                                            metadata={"hnsw:space": "cosine"})
 
 
 def load_clauses() -> list[dict]:
-    path = Path(CONFIG["clauses_file"])
+    path = data_path("clauses_file")
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
@@ -54,7 +51,7 @@ def build() -> None:
         metadatas=[{k: c[k] for k in ("insurer", "title", "guarantee", "is_exclusion", "page")}
                    for c in clauses],
     )
-    print(f"Indexed {col.count()} clauses in {CONFIG['chroma_dir']}")
+    print(f"Indexed {col.count()} clauses in {data_path('chroma_dir')}")
 
 
 if __name__ == "__main__":

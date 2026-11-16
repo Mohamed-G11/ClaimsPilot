@@ -9,10 +9,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-import yaml
-from pypdf import PdfReader
-
-CONFIG = yaml.safe_load(Path("agents/policy/config.yaml").read_text(encoding="utf-8"))
+from agents.policy.settings import CONFIG, data_path
 
 # Lines repeated on every page (headers, footers, page numbers) - removed.
 NOISE = re.compile(
@@ -63,6 +60,8 @@ def guarantee_of(title: str) -> str:
 
 def read_lines(pdf_path: Path, start_page: int, end_page: int) -> list[tuple[int, str]]:
     """(page number, line) for every useful line between start_page and end_page."""
+    from pypdf import PdfReader  # lazy import: only needed to read the PDFs
+
     lines = []
     for number, page in enumerate(PdfReader(pdf_path).pages, start=1):
         if number < start_page or number > end_page:
@@ -128,8 +127,8 @@ def to_chunks(insurer: str, sections: list[dict], max_chars: int) -> list[dict]:
 
 
 def main() -> None:
-    raw_dir = Path(CONFIG["raw_dir"])
-    out = Path(CONFIG["clauses_file"])
+    raw_dir = data_path("raw_dir")
+    out = data_path("clauses_file")
     out.parent.mkdir(parents=True, exist_ok=True)
     all_chunks = []
     for insurer, cfg in CONFIG["insurers"].items():

@@ -7,13 +7,9 @@ Contract (AGENTS.md section 4): run(claim: ClaimInput, vision: VisionResult) -> 
 3. Retrieval: search the insurer's general conditions for the most relevant clauses
 4. Decision: covered if the formula includes a needed guarantee; answer cites the clauses
 """
-from pathlib import Path
-
-import yaml
-
+from agents.policy.settings import CONFIG
 from claimspilot.schemas import ClaimInput, PolicyClause, PolicyResult, VisionResult
 
-CONFIG = yaml.safe_load(Path("agents/policy/config.yaml").read_text(encoding="utf-8"))
 MODEL_VERSION = "policy-rag-v1"
 
 PART_FR = {
