@@ -123,9 +123,10 @@ def analyze(claim: ClaimInput, vision: VisionResult, retriever=retrieve,
         # evidence: the general exclusions + the exclusions of the guarantees concerned
         concerned = (rules.guarantees_for_cause(cause) if cause
                      else rules.guarantees_from_damages(vision.damages))
-        found = retriever(query, insurer, [GENERAL_EXCLUSIONS, *concerned],
-                          rcfg["k_guarantee"] + rcfg["k_exclusions"], True)
         labels = ", ".join(CONFIG["exclusions"][name]["label"] for name in exclusions)
+        hint = rcfg["exclusion_hint"].format(exclusions=labels)
+        found = retriever(f"{hint} {claim.text}", insurer, [GENERAL_EXCLUSIONS, *concerned],
+                          rcfg["k_guarantee"] + rcfg["k_exclusions"], True)
         refs = " ".join(f"[{c['clause_id']}]" for c in found)
         return done("exclusion", None,
                     f"Exclusion possible relevée dans la déclaration : {labels}. Les "
@@ -160,9 +161,11 @@ def analyze(claim: ClaimInput, vision: VisionResult, retriever=retrieve,
     known = {g for guarantees in CONFIG["formulas"].values() for g in guarantees}
     if not any(g in known for g in needed):
         names = ", ".join(generation.GUARANTEE_FR.get(g, g) for g in needed)
+        refs = " ".join(f"[{c['clause_id']}]" for c in found)
         return done("guarantee_not_in_formulas", None,
                     f"La garantie « {names} » n'est rattachée à aucune formule connue : "
-                    "vérification manuelle nécessaire.", found, cause=cause, needed=needed)
+                    f"vérification manuelle nécessaire. Clauses à vérifier : {refs or 'aucune'}.",
+                    found, cause=cause, needed=needed)
     covered = bool(matching)
     details = {"cause": cause, "needed": needed, "rule_covered": covered}
     if covered and not any(not c["is_exclusion"] for c in found):

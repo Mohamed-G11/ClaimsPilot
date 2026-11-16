@@ -12,6 +12,9 @@ retrieval:
   k_guarantee: 2
   k_exclusions: 2
   clause_chars: 600          # clause text is cut to this length in the result
+  # Words put before the claim text when searching exclusion clauses, so the
+  # search looks for the exclusion found by the rules ({exclusions} = its label).
+  exclusion_hint: "Exclusions, ce que nous ne garantissons pas : {exclusions}."
 
 # One entry per insurer: which PDF, where the real text starts (after the
 # table of contents), and how its section titles are written.
