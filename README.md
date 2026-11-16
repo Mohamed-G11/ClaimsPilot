@@ -53,6 +53,7 @@ dvc pull
 | `requirements-policy.txt` | policy agent: embeddings, Chroma, PDF reading | no (heavy) |
 | `requirements-vision.txt` | vision agent: PyTorch, Ultralytics | no (heavy) |
 | `requirements-ui.txt` | Streamlit page | no |
+| `requirements-docker.txt` | runtime libraries of the real agents, for the full Docker image | no |
 
 Install the heavy files only for the agent you work on. Without them the API still runs: a missing agent is replaced by a stub and the claim is sent to human review.
 
@@ -61,7 +62,7 @@ Install the heavy files only for the agent you work on. Without them the API sti
 ```
 uvicorn api.main:app --reload        # API on http://127.0.0.1:8000/docs
 streamlit run ui/app.py              # claims page (needs requirements-ui.txt and the API running)
-docker compose up --build -d         # same API in Docker, with healthcheck
+docker compose up --build -d         # API with the real agents in Docker (see "Run with Docker")
 pytest                               # tests
 ruff check .                         # lint
 ```
@@ -82,6 +83,49 @@ python -m agents.policy.index                 # clauses -> Chroma index in data/
 ```
 
 The Chroma index is rebuilt locally (never committed, never pushed). Settings: `agents/policy/config.yaml`.
+
+How it decides (text and photos must agree; the rules decide, the LLM only explains):
+
+1. An exclusion in the text (alcohol, no licence, racing, intentional damage) → `covered = None`, a human decides.
+2. The cause is read from the text (collision, vol, incendie, bris de glace, vandalisme, catastrophe naturelle). The damages seen by vision must be compatible with it, else `covered = None`. No cause in the text → the guarantee is deduced from the damages.
+3. The formula (`TR` / `TIERS`) decides `covered = True / False`; the clauses of the guarantee and its exclusions are returned as evidence.
+4. Phi-3.5-mini writes the answer in French and cites the clause ids. If it contradicts the rule → `covered = None`. If Ollama is not reachable or too slow → template answer (`model_version` says which).
+
+Answer generation with Ollama (optional – without it the agent uses the template):
+
+```
+ollama pull phi3.5                            # once, about 2.2 GB
+ollama serve                                  # if the Ollama app is not already running
+```
+
+Evaluation on the 30 labelled claims of `data/policy/eval_claims.csv` (logged to MLflow, experiment `claimspilot-policy`):
+
+```
+python -m agents.policy.evaluate              # add --no-llm for template answers only
+```
+
+## Run with Docker
+
+One `Dockerfile`, two images:
+
+| Target | Built by | Contains | Agents |
+|---|---|---|---|
+| `light` | CI (`docker build --target light .`) | API + agent code only | NLP real, vision and policy stubs → every claim goes to human review |
+| `full` | `docker compose build` | + PyTorch CPU, Ultralytics, sentence-transformers, Chroma | all real |
+
+Model weights and policy data are never inside the image: they are mounted from your disk.
+
+```
+dvc pull models/vision/yolov8s_merged_e30.pt.dvc data/policy/processed.dvc
+docker compose build                                            # long the first time (several GB)
+docker compose run --rm api python -m agents.policy.index       # builds the policy index
+docker compose up -d
+curl http://localhost:8000/health
+```
+
+- Photos: put them in `data/uploads/` and send paths like `data/uploads/c1_front.jpg` (the folder is mounted in the container).
+- Ollama runs on your machine, not in Docker: the container reaches it at `host.docker.internal:11434`.
+- Which agents were real for a claim: field `agents` of `POST /claims/analyze`.
 
 ## Team workflow
 
