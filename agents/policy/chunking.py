@@ -32,6 +32,8 @@ HEADINGS = {
 # The words are matched as WHOLE words: "vol" matches "Vol du véhicule" but not
 # "volant". A final "s" is accepted ("bris de glaces", "franchises").
 GUARANTEES = [
+    ("exclusions generales", "exclusions_generales"),   # SANLAM "TITRE III"
+    ("exclusions communes", "exclusions_generales"),    # AXA article 23
     ("bris de glace", "bris_de_glace"),
     ("collision", "collision"),
     ("tous accidents", "tous_risques"),
@@ -40,6 +42,8 @@ GUARANTEES = [
     ("incendie", "incendie"),
     ("vol", "vol"),
     ("vandalisme", "vandalisme"),
+    ("inondation", "catastrophe_naturelle"),
+    ("evenements climatiques", "catastrophe_naturelle"),
     ("responsabilite civile", "rc"),
     ("defense", "defense_recours"),
     ("recours", "defense_recours"),
@@ -95,8 +99,14 @@ def split_sections(lines, style: str) -> list[dict]:
                 title = f"{parent} - {title}"                  # e.g. "R7 Dommages collision - Exclusions"
             elif style == "risks":
                 parent = ""
-            current = {"title": title, "number": groups[0], "page": page, "lines": []}
+            current = {"title": title, "number": groups[0], "page": page, "lines": [],
+                       "untitled": len(groups) == 1}
             sections.append(current)
+        elif current and current["untitled"] and not current["lines"] \
+                and len(line) < 80 and line == line.upper():
+            # "TITRE III" alone on its line: its title is the next line, in capitals.
+            current["title"] = f"{current['title']} {line.strip()}"
+            current["untitled"] = False
         elif current:
             current["lines"].append(line)
     return sections
