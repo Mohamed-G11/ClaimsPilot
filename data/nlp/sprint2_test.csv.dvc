@@ -1,0 +1,5 @@
+outs:
+- md5: 0175a5773b3f3ad94bfe60a14d73f65a
+  size: 982
+  hash: md5
+  path: sprint2_test.csv

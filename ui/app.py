@@ -1,129 +1,107 @@
-"""ClaimsPilot – claims handler page.
+"""ClaimsPilot - claims page (Streamlit).
 
-Run the API first (uvicorn api.main:app --reload), then:
-    streamlit run ui/app.py
+Sends a claim (photos + text) to the API `POST /claims` and shows the decision
+with its reasons. Run, with the API already started:
+    uvicorn api.main:app --port 8000          # terminal 1
+    streamlit run ui/app.py                   # terminal 2
+
+Env vars:
+    CLAIMSPILOT_API_URL   default http://localhost:8000
+    CLAIMSPILOT_UPLOADS   folder where uploaded photos are saved (default: system temp)
+
+The API takes photo *paths* (ClaimInput.photo_paths), so uploaded photos are saved to
+a folder the API can read: this works when the UI and the API run on the same machine
+(or share a docker volume).
 """
+import os
+import tempfile
 import uuid
 from pathlib import Path
 
-import requests
+import httpx
 import streamlit as st
-from PIL import Image, ImageDraw
 
-UPLOAD_DIR = Path("data/uploads")
-INSURERS = {"AXA": "AXA", "Sanlam": "SANLAM"}
-FORMULAS = {"Tous risques": "TR", "Tiers": "TIERS"}
-EXAMPLES = {
-    "— écrire ma propre déclaration —": "",
-    "Choc arrière au parking": "En reculant sur le parking, une voiture a heurté l'arrière "
-    "de mon véhicule. Le pare-chocs arrière est enfoncé.",
-    "Pare-brise fissuré": "Un gravillon a frappé mon pare-brise sur l'autoroute, il est "
-    "maintenant fissuré.",
-    "Phare cassé": "J'ai percuté un poteau en sortant du garage, le phare avant est cassé.",
-}
-DECISION_STYLE = {
-    "approve": ("✅ Approuvé automatiquement", "success"),
-    "reject": ("❌ Refusé", "error"),
-    "human_review": ("🧑‍💼 Envoyé à un gestionnaire", "warning"),
+API_URL = os.getenv("CLAIMSPILOT_API_URL", "http://localhost:8000").rstrip("/")
+UPLOADS = Path(os.getenv("CLAIMSPILOT_UPLOADS",
+                         Path(tempfile.gettempdir()) / "claimspilot_uploads"))
+SAMPLES = Path("data/vision/car_dent_scratch_split/test/images")
+
+BADGE = {
+    "approve": ("Approved", "green"),
+    "reject": ("Rejected", "red"),
+    "human_review": ("Sent to a claims handler", "orange"),
 }
 
-st.set_page_config(page_title="ClaimsPilot", page_icon="🚗", layout="wide")
 
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    api_url = st.text_input("Adresse de l'API", "http://127.0.0.1:8000")
+def api_is_up() -> bool:
     try:
-        ok = requests.get(f"{api_url}/health", timeout=3).json().get("status") == "ok"
-    except requests.RequestException:
-        ok = False
-    st.write("API :", "🟢 en ligne" if ok else "🔴 hors ligne")
+        return httpx.get(f"{API_URL}/health", timeout=3).status_code == 200
+    except httpx.HTTPError:
+        return False
 
-st.title("🚗 ClaimsPilot")
-st.caption("Assistant multi-agents pour les sinistres automobiles : "
-           "vision (photos) · NLP (déclaration) · RAG (contrat) · décision")
+
+def save_uploads(claim_id: str, files) -> list[str]:
+    folder = UPLOADS / claim_id
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for f in files:
+        path = folder / Path(f.name).name
+        path.write_bytes(f.getvalue())
+        paths.append(str(path.resolve()))
+    return paths
+
+
+st.set_page_config(page_title="ClaimsPilot", page_icon=":car:", layout="wide")
+st.title("ClaimsPilot - new claim")
+
+if api_is_up():
+    st.caption(f"API: {API_URL} - online")
+else:
+    st.error(f"The API is not reachable at {API_URL}. Start it with "
+             "`uvicorn api.main:app --port 8000`.")
 
 with st.form("claim"):
-    left, right = st.columns(2)
-    with left:
-        insurer = st.selectbox("Assureur", list(INSURERS))
-        formula = st.selectbox("Formule souscrite", list(FORMULAS))
-        example = st.selectbox("Exemple", list(EXAMPLES))
-    with right:
-        photos = st.file_uploader("Photos du véhicule", type=["jpg", "jpeg", "png"],
-                                  accept_multiple_files=True)
-    text = st.text_area("Description du sinistre", EXAMPLES[example], height=110)
-    submitted = st.form_submit_button("Analyser le sinistre", type="primary")
+    col_text, col_photos = st.columns(2)
+    with col_text:
+        text = st.text_area("What happened?", height=150,
+                            placeholder="Le pare-chocs arrière a été enfoncé sur un parking.")
+        policy_id = st.text_input("Policy number", value="POL-123")
+        language = st.selectbox("Language", ["fr", "en", "ar"])
+    with col_photos:
+        uploads = st.file_uploader("Photos of the damage", type=["jpg", "jpeg", "png"],
+                                   accept_multiple_files=True)
+        samples = sorted(p.name for p in SAMPLES.glob("*.jpg")) if SAMPLES.exists() else []
+        picked = st.multiselect("...or test photos from the dataset", samples)
+    submitted = st.form_submit_button("Submit the claim", type="primary")
 
 if submitted:
-    claim_id = f"C-{uuid.uuid4().hex[:6].upper()}"
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    paths = []
-    for photo in photos or []:
-        path = UPLOAD_DIR / f"{claim_id}_{photo.name}"
-        path.write_bytes(photo.getbuffer())
-        paths.append(str(path.resolve()))
-    claim = {"claim_id": claim_id, "photo_paths": paths, "text": text,
-             "policy_id": f"{INSURERS[insurer]}-{FORMULAS[formula]}"}
+    claim_id = f"C-{uuid.uuid4().hex[:8]}"
+    photo_paths = save_uploads(claim_id, uploads or [])
+    photo_paths += [str((SAMPLES / name).resolve()) for name in picked]
+    if not text.strip() or not photo_paths:
+        st.warning("Please describe what happened and add at least one photo.")
+        st.stop()
 
-    with st.spinner("Les agents analysent le sinistre…"):
+    claim = {"claim_id": claim_id, "photo_paths": photo_paths, "text": text,
+             "policy_id": policy_id, "language": language}
+    with st.spinner("The agents are analysing the claim..."):
         try:
-            response = requests.post(f"{api_url}/claims/analyze", json=claim, timeout=180)
+            response = httpx.post(f"{API_URL}/claims", json=claim, timeout=120)
             response.raise_for_status()
-            result = response.json()
-        except requests.RequestException as error:
-            st.error(f"Appel à l'API impossible : {error}")
+        except httpx.HTTPError as err:
+            st.error(f"The API returned an error: {err}")
             st.stop()
+    decision = response.json()
 
-    decision, agents = result["decision"], result["agents"]
-    label, kind = DECISION_STYLE[decision["decision"]]
-    getattr(st, kind)(f"### {label}\nDossier **{claim_id}** · contrat **{claim['policy_id']}**"
-                      f" · confiance {decision['confidence']:.0%}")
+    label, color = BADGE.get(decision["decision"], (decision["decision"], "gray"))
+    st.subheader(f"Claim {decision['claim_id']}")
+    st.markdown(f"### :{color}[{label}]")
+    st.metric("Confidence", f"{decision['confidence']:.0%}")
+
+    st.markdown("**Why**")
     for reason in decision["reasons"]:
-        st.write("•", reason)
+        st.markdown(f"- {reason}")
+    if decision.get("trace_id"):
+        st.caption(f"Langfuse trace: {decision['trace_id']}")
 
-    def badge(name):
-        status = agents.get(name, "?")
-        return "🟢 agent réel" if status == "real" else f"🟡 {status}"
-
-    col_vision, col_nlp, col_policy = st.columns(3)
-
-    with col_vision:
-        vision = result["vision"]
-        st.subheader("👁️ Vision")
-        st.caption(badge("vision"))
-        st.metric("Gravité", vision["severity"])
-        for path in paths:
-            image = Image.open(path).convert("RGB")
-            draw = ImageDraw.Draw(image)
-            for d in vision["damages"]:
-                draw.rectangle(d["bbox"], outline="red", width=4)
-                draw.text((d["bbox"][0] + 4, d["bbox"][1] + 4),
-                          f"{d['part']} / {d['damage_type']}", fill="red")
-            st.image(image, width="stretch")
-        if vision["damages"]:
-            st.table([{"pièce": d["part"], "dommage": d["damage_type"],
-                       "confiance": f"{d['confidence']:.0%}"} for d in vision["damages"]])
-        else:
-            st.info("Aucun dommage détecté.")
-
-    with col_nlp:
-        nlp = result["nlp"]
-        st.subheader("📝 Déclaration")
-        st.caption(badge("nlp"))
-        st.metric("Cohérence texte / photos", nlp["consistency"], f"score {nlp['score']:.2f}")
-        st.write("Pièces citées dans le texte :",
-                 ", ".join(nlp["described_parts"]) or "aucune")
-
-    with col_policy:
-        policy = result["policy"]
-        st.subheader("📄 Contrat (RAG)")
-        st.caption(badge("policy"))
-        covered = {True: "Couvert", False: "Non couvert", None: "Indéterminé"}
-        st.metric("Garantie", covered[policy["covered"]])
-        st.write(policy["answer"])
-        for clause in policy["clauses"]:
-            with st.expander(f"{clause['clause_id']} · pertinence {clause['relevance']:.2f}"):
-                st.write(clause["text"])
-
-    with st.expander("Réponse brute de l'API (JSON)"):
-        st.json(result)
+    st.image(photo_paths, width=240, caption=[Path(p).name for p in photo_paths])

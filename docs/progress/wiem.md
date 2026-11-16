@@ -23,3 +23,21 @@ Done: yolov8n-e30 registered in the MLflow Model Registry as `claimspilot-vision
 Metrics: demo on 3 photos → 2 correct detections (headlight/crack 0.28, rear_bumper/dent 0.40), 1 missed damage (taillight, empty result) — consistent with recall 0.25. 13 vision tests passing.
 Blocked by: review of PRs #9 → #10 → #11 (this PR is built on top of them).
 Next: share the example VisionResults with Hend and Mohamed; if time allows, one more training with merged classes (part + damage type) to improve recall.
+
+## 2026-11-09 (3) — Sprint 2
+Done: classes merged from 18 to 8 (one per part + damage type) with merge_classes.py, since Minor/Medium/Major variants of the same damage were the main source of confusion and severity is computed by the rule anyway; merged dataset versioned with DVC; train.py --merged option; YOLOv8n retrained on merged classes (30 epochs, CPU) and used by the agent (config: weights + class_mapping); registered as `claimspilot-vision-yolo` v2; tests made independent of the configured model.
+Metrics: yolov8n-merged-e30 — test mAP50 = 0.337 (vs 0.199 with 18 classes, +69%), mAP50-95 0.171, P 0.550, R 0.301. MLflow run id 5934a282b9ee484d8860ffd14349d674, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Note: 8-class mAP is an easier task than 18-class mAP, but it is exactly what the agent needs (part + damage type).
+Blocked by: claimspilot/schemas.py on main; GPU access for YOLOv8s.
+Next: YOLOv8s on merged classes on a GPU (Colab), as advised by our supervisor; propose the human-in-the-loop design at the Sunday checkpoint.
+
+## 2026-11-10 — Sprint 2
+Done: YOLOv8s trained on the 8 merged classes (stretch 8, advised by our supervisor) on a Colab T4 GPU with the same script and tracking (new --device option, CPU stays the default); weights versioned with DVC and used by the agent; registered as `claimspilot-vision-yolo` v3 (recall improved).
+Metrics: yolov8s-merged-e30 — test mAP50 = 0.385 (vs 0.337 for yolov8n-merged-e30), mAP50-95 0.184, P 0.627, R 0.364. MLflow run id cca12ea8faa14ca296938b96ee276c84, data_version dvc:1c1798c74763dece81ee8a5cc6a2d8ee.dir. Overall: mAP50 0.183 (baseline) → 0.385.
+Blocked by: none.
+Next: regenerate the example VisionResults with YOLOv8s; measure CPU inference time for the API; decision agent (LangGraph) in sprint 3.
+
+## 2026-11-13 — Sprint 3 (started early)
+Done: Streamlit claims page in ui/app.py (AGENTS.md stretch): form with claim text, policy number, language and photos (upload or test photos from the dataset); sends the claim to POST /claims and shows the decision badge, confidence, reasons, Langfuse trace id (when present) and photos; API health check; API URL and upload folder configurable by env vars; requirements-ui.txt (streamlit, httpx). Tested end to end with the API (stub agents).
+Metrics: n/a (UI).
+Blocked by: real agents plugged into api/pipeline.py (Mohamed); the API takes photo paths, so uploads must be saved on the same machine or a shared docker volume (an upload endpoint could be added later).
+Next: sprint 2 checkpoint (Sunday); human-in-the-loop view for human_review claims if the team agrees.
