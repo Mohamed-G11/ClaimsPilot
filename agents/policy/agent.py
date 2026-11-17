@@ -96,9 +96,13 @@ def _to_schema(found: list[dict]) -> list[PolicyClause]:
                          relevance=c["relevance"]) for c in found]
 
 
-def analyze(claim: ClaimInput, vision: VisionResult, retriever=retrieve,
+def analyze(claim: ClaimInput, vision: VisionResult, retriever=None,
             generator: generation.Generator | None = None) -> PolicyAnalysis:
-    """Full analysis of one claim. `run()` returns only its PolicyResult."""
+    """Full analysis of one claim. `run()` returns only its PolicyResult.
+
+    retriever / generator: None = the real ones (Chroma index, Ollama). Tests pass fakes.
+    """
+    retriever = retriever or retrieve
     insurer, formula = parse_policy_id(claim.policy_id)
     bought = CONFIG["formulas"].get(formula)
     rcfg = CONFIG["retrieval"]
@@ -204,6 +208,6 @@ def analyze(claim: ClaimInput, vision: VisionResult, retriever=retrieve,
                 generator="llm", llm_verdict=verdict, **details)
 
 
-def run(claim: ClaimInput, vision: VisionResult, retriever=retrieve,
+def run(claim: ClaimInput, vision: VisionResult, retriever=None,
         generator: generation.Generator | None = None) -> PolicyResult:
     return analyze(claim, vision, retriever, generator).result
