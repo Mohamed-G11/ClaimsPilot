@@ -1,13 +1,22 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from api import warmup
 from api.pipeline import ClaimAnalysis, analyze_claim, process_claim
 from claimspilot.schemas import ClaimInput, Decision
 
 API_VERSION = os.getenv("CLAIMSPILOT_VERSION", "0.3.0")   # set by Docker / CI at release time
 
-app = FastAPI(title="ClaimsPilot API", version=API_VERSION)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    warmup.start_warmup()          # background thread: the API does not wait for it
+    yield
+
+
+app = FastAPI(title="ClaimsPilot API", version=API_VERSION, lifespan=lifespan)
 
 
 @app.get("/health")
