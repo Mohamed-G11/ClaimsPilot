@@ -219,6 +219,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local MLflow experiment tracking
+mlflow.db
+mlruns/
+
 # ClaimsPilot: generated locally, never committed
 data/policy/chroma/
 data/uploads/
