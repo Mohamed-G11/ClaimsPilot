@@ -652,7 +652,7 @@ Risks I see in the untested part: (1) `torch` / `torchvision` are not pinned in 
 
 ## Entry 7 — The API uses Wiem's LangGraph decision agent
 
-**Date:** 2026-11-19 · **Branch:** `feat/api-decision-agent` (from `main`) · **Commit:** `7c3a811`
+**Date:** 2026-11-19 · **Branch:** `feat/api-decision-agent` (from `main`) · **Commits:** `7c3a811`, then `2945816` (your answers, below)
 **Goal:** the API stops using its own `decide()` and uses Wiem's decision agent (`agents/decision/`), with our stub safety rule kept in front of it. Design approved by Mohamed.
 
 **Why:** there were two decision logics (my `decide()` in `api/pipeline.py` and Wiem's `agents/decision/rules.py`), which could disagree. Now there is one: Wiem's rules, run either through her LangGraph graph or directly. The stub safety rule stays in the API, because only the API knows which agent fell back to a stub.
@@ -669,7 +669,11 @@ vision, nlp, policy  (each: real agent, or stub on any error)
 agents.decision.agent.run(claim, vision, nlp, policy)      agents["decision"] = "langgraph"
         | raises (LangGraph not installed, graph error...)
         v
-agents.decision.rules.decide(claim, vision, nlp, policy)   agents["decision"] = "rules (fallback)"
+agents.decision.rules.decide(claim, vision, nlp, policy)   agents["decision"] = "rules (fallback: <ErrorType>)"
+        | raises too (config.yaml missing...)
+        v
+human_review, confidence 0.0, reason "no automatic decision: ... both failed"
+                                                           agents["decision"] = "safety: decision failed (<agent error>, <rules error>)"
 ```
 
 The graph's `decide` node calls the same `rules.decide()`, so the fallback gives exactly the same Decision as LangGraph. Only `agents["decision"]` differs.
@@ -701,7 +705,7 @@ The graph's `decide` node calls the same `rules.decide()`, so the fallback gives
 
 ```
 python -m pytest tests/test_claims.py tests/test_pipeline_e2e.py tests/decision -q
-pip install -r requirements-decision.txt     # optional: then agents["decision"] == "langgraph"
+pip install -r requirements-decision.txt     # then agents["decision"] == "langgraph" and the LangGraph tests run
 uvicorn api.main:app --reload                # POST /claims/analyze, read agents["decision"]
 ```
 
@@ -712,14 +716,26 @@ Tests added in `tests/test_claims.py`: stub used → human_review, confidence 0.
 - `pytest`: **167 passed, 3 skipped** (161 passed, 2 skipped on `main` before). The new skip is the real-LangGraph test (LangGraph is not in my venv, nor in CI).
 - `ruff check .`: all checks passed.
 - Light image simulated (new venv with only `requirements.txt`): API imports; a claim gives `vision: stub (ImportError…)`, `decision: safety: stub used`, `human_review 0.0`. The policy agent now fails on `chromadb` instead of `yaml`, so it is still a stub there for real contracts.
-- **Not verified:** Docker build (Docker Desktop not running), and the real LangGraph path (LangGraph not installed).
+- **Not verified:** Docker build (Docker Desktop not running).
 
-### Open questions for Mohamed
+### Your answers (Nov 19) and what changed (`2945816`)
 
-1. **If the rules fallback itself fails** (e.g. `config.yaml` missing), the exception goes up and the API answers 500. I added no third logic. Alternative: human_review with confidence 0.0.
-2. **`agents["decision"] = "rules (fallback)"` does not say why** (exact string you asked for). The reason is only in the log (`logger.warning`). Add it, like the agents' `"stub (reason)"`?
-3. **`requirements-decision.txt` is not pinned** (`langgraph`, `pyyaml`) — Wiem's file. The full image is not reproducible for LangGraph. Ask her to pin it?
-4. **Wiem's stricter rules** (list above): e.g. no damage detected → always human review. Agree with her that these are the wanted defaults.
+1. **Rules fallback fails too → human_review, confidence 0.0, never a 500.** `make_decision()` catches the rules' error and returns `human_review` with the reason `no automatic decision: the decision agent (<type>) and its rules (<type>: <message>) both failed`. Status: `safety: decision failed (<agent error type>, <rules error type>)` — this exact wording was my choice, change it if you prefer another. Tests: `test_rules_failing_too_goes_to_human_never_500`, `test_rules_failing_too_still_answers_over_http` (HTTP 200).
+2. **Fallback reason in the status:** `rules (fallback: <ExceptionType>)`, e.g. `rules (fallback: ModuleNotFoundError)` when LangGraph is not installed. The full message stays in the log.
+3. **`requirements-decision.txt` not changed** — you will ask Wiem to pin `langgraph`.
+
+### Merge of `main` (Hend's PR #22) and LangGraph run
+
+- `git merge main` (main = `3b15211`, Hend's held-out evaluation): **no conflict**. Brought `agents/nlp/agent.py`, `agents/nlp/evaluate.py`, `data/nlp/validate_heldout.py`, `tests/nlp/test_improvements.py`, the NLP notebook, `.gitignore`, `docs/progress/hend.md`.
+- `pip install -r requirements-decision.txt` in `.venv` → **langgraph 1.2.23** (+ langchain-core 1.8.3, langsmith 0.15.0…). Outside Git, on this machine only.
+- Real LangGraph tests: `test_real_langgraph_agent_matches_the_fallback` + Wiem's 3 graph tests → **4 passed**.
+- Full `pytest`: **184 passed, 1 skipped** (the skip is Wiem's vision test: weights / test images not pulled). Without LangGraph: 180 passed, 3 skipped.
+- `make_decision()` on the stub claim with LangGraph installed → `approve 0.82`, status `"langgraph"`.
+- `ruff check .`: all checks passed.
+
+### Still open
+
+- **Wiem's stricter rules** (list above): e.g. no damage detected → always human review. Agree with her that these are the wanted defaults.
 
 ---
 
