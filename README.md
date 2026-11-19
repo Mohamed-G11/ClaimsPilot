@@ -1,151 +1,207 @@
 # ClaimsPilot
 
-Multi-agent AI assistant for car insurance claims. A customer submits photos and a short description; the system checks them against the insurance policy and decides to **approve**, **reject**, or **send to a human**. Every decision is traceable and monitored.
+Multi-agent AI assistant for car insurance claims. A customer sends **photos of the damage + a short text**, and the system checks them against the customer's **insurance contract**. It then decides to **approve**, **reject**, or **send the claim to a human**. Every decision comes with its reasons and with the version of each model that produced it. MLOps (versioning, tracking, CI, Docker) is part of the deliverable, not an extra.
 
-Academic project – TEK-UP University, 2026–2027.
+Academic project, TEK-UP University, 2026–2027, supervised by Ms. Sonia Gharsalli.
 
-## Agents
+- Code: https://github.com/Mohamed-G11/ClaimsPilot
+- Data, models and experiments (DagsHub): https://dagshub.com/Mohamed-G11/ClaimsPilot
+- MLflow tracking server: https://dagshub.com/Mohamed-G11/ClaimsPilot.mlflow
 
-| Agent | What it does | Owner |
-|---|---|---|
-| Vision | Detects damage on photos (YOLOv8) and rates severity | Wiem Ghouili |
-| NLP | Checks the claim text matches what the photos show | Hend Zitouni |
-| Policy (RAG) | Finds the relevant policy clauses and says if the damage is covered | Mohamed Jebari |
-| Decision | Combines all results (rules in `api/pipeline.py` today, LangGraph agent in sprint 3) | Wiem Ghouili |
-| MLOps platform | CI/CD, DVC, MLflow, Docker, API, monitoring | Mohamed Jebari |
+## How it works
 
-## Stack
+```
+ Customer: photos + text + policy_id ("AXA-TR", "SANLAM-TIERS"...)
+        |
+        |  POST /claims   (FastAPI, api/)
+        v
+ +-----------------+    +---------------------+    +--------------------------------+
+ | 1. Vision       | -> | 2. NLP              | -> | 3. Policy (RAG)                |
+ | YOLOv8s finds   |    | parts named in the  |    | cause + exclusions from text,  |
+ | damaged parts,  |    | text (FR/EN) vs     |    | formula of the contract,       |
+ | rule -> severity|    | parts on the photos |    | clauses from Chroma, answer    |
+ +-----------------+    +---------------------+    | written by a local LLM         |
+                                                   +--------------------------------+
+        |  each agent: the real one, or a STUB if it cannot run (library or file missing)
+        v
+ 4. Decision (api/pipeline.py, make_decision)
+    a. any agent used a stub?       -> human_review, confidence 0.0  (safety rule)
+    b. else LangGraph decision agent (agents/decision/agent.py)
+    c. if LangGraph is missing/fails -> the same rules without LangGraph (agents/decision/rules.py)
+    d. if the rules fail too         -> human_review, confidence 0.0  (never an HTTP 500)
+        v
+ Decision: approve / reject / human_review + confidence + reasons
+```
 
-Python 3.11 · FastAPI · Pydantic · YOLOv8 · sentence-transformers · Chroma · Phi-3.5-mini (Ollama) · LangGraph · Streamlit · DVC + DagsHub · MLflow · Docker · GitHub Actions
+| Agent | What it does | Code | Owner |
+|---|---|---|---|
+| Vision | YOLOv8s (8 classes = part + damage type) detects damage on each photo; a points rule gives `minor / moderate / severe` | `agents/vision/` | Wiem Ghouili |
+| NLP | Finds the car parts named in the text (keywords, French + English, with negation handling) and compares them with the parts seen by vision: `consistent / inconsistent / uncertain` | `agents/nlp/` | Hend Zitouni |
+| Policy (RAG) | Reads the real **AXA** and **SANLAM** contracts (PDF). Rules read the cause and exclusions in the text and check the contract formula (`TR` = all risks, `TIERS` = third party). Chroma returns the matching clauses as evidence, and a local LLM (Ollama) writes the answer. Template answer when no LLM is available | `agents/policy/` | Mohamed Jebari |
+| Decision | LangGraph graph vision → nlp → policy → decide; configurable rules (reject if not covered; human review if coverage unknown, text inconsistent or uncertain, low scores, severe damage, nothing detected) | `agents/decision/` | Wiem Ghouili |
+| Claims page | Streamlit form: send a claim, see the decision and its reasons | `ui/` | Wiem Ghouili |
+| MLOps platform | API, CI, DVC, MLflow helper, Docker | `api/`, `mlops/`, `.github/`, `Dockerfile` | Mohamed Jebari |
 
-## Setup (Windows / PowerShell)
+The agents only talk through the Pydantic models in `claimspilot/schemas.py` (`ClaimInput`, `VisionResult`, `NLPResult`, `PolicyResult`, `Decision`).
+
+## Current results
+
+Read each number together with the data it was measured on. Only the vision number comes from a separate test split.
+
+| Agent | Metric | Value | Measured on | MLflow run |
+|---|---|---|---|---|
+| Vision (YOLOv8s, 8 merged classes, 30 epochs) | mAP50 / mAP50-95 / precision / recall | **0.385** / 0.184 / 0.627 / 0.364 | **test split**: 366 images never seen in training (Roboflow car damage dataset, split by source photo) | `cca12ea8faa14ca296938b96ee276c84` (model registry: `claimspilot-vision-yolo` v3) |
+| Vision, baseline (YOLOv8n, 18 classes) | mAP50 | 0.183 | same test split | `1978f3ebb19543b19d628bc34c0f9ef0` |
+| NLP (`nlp-keywords-v2`) | accuracy / macro F1 | ≈ 97 % / 0.865 | **development set**: 220 synthetic claims generated by the team | experiment `claimspilot-nlp` |
+| NLP | accuracy | 93.3 % (14 / 15) | 15 synthetic challenge cases (development) | `c174666b74a34dc190970d20ff290d42` |
+| Policy | coverage accuracy / right clause in top-4 | 96.7 % (29 / 30) / 80 % (20 / 25) | **own set**: 30 labelled claims written by the author of the rules, template answers | `06cb6db73c2e4132931a439b87a68a76` |
+| Decision | — | no metric yet (rules, covered by unit tests) | — | — |
+
+Planned: NLP evaluation on an independent held-out set (at least 120 claims written by other people, checked by `data/nlp/validate_heldout.py`); policy answers measured with the LLM (not measured yet); a policy evaluation set written by someone other than the rule author.
+
+## Setup from zero (Windows / PowerShell)
+
+**1. Code and Python.** Use Python 3.11, the version CI and Docker run on.
 
 ```
 git clone https://github.com/Mohamed-G11/ClaimsPilot.git
 cd ClaimsPilot
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
 ```
 
-Secrets – copy the template and fill in **your own** DagsHub username and token (DagsHub → Settings → Tokens). `.env` is never committed.
+**2. Requirements files.** Install only what you work on. Missing agents are replaced by stubs, and the API still runs.
+
+| File | For | In CI |
+|---|---|---|
+| `requirements.txt` | the API alone (FastAPI, Pydantic, PyYAML): light Docker image | yes |
+| `requirements-dev.txt` | `requirements.txt` + tests, lint, DVC, MLflow | yes |
+| `requirements-vision.txt` | vision agent and training: PyTorch CPU, Ultralytics, OpenCV, Roboflow | no (heavy) |
+| `requirements-policy.txt` | policy agent: sentence-transformers, Chroma, pypdf | no (heavy) |
+| `requirements-decision.txt` | LangGraph decision agent (without it, the API uses the same rules without LangGraph) | no |
+| `requirements-ui.txt` | Streamlit page | no |
+| `requirements-docker.txt` | runtime libraries of the real agents, for the full Docker image | no |
+
+The NLP agent itself needs nothing extra. Its evaluation scripts (`agents/nlp/evaluate.py`, `data/nlp/evaluate_sprint2.py`) also need `scikit-learn`, which is not in a requirements file yet (`pip install scikit-learn`).
+
+**3. Secrets (`.env`).** Copy the template and fill in **your own** DagsHub username and token (DagsHub → Settings → Tokens). `.env` is git-ignored: never commit it.
 
 ```
 copy .env.example .env
-python -m mlops.check_mlflow_connection     # checks that MLflow accepts your credentials
+python -m mlops.check_mlflow_connection      # logs one tiny run: checks your credentials
 ```
 
-Data and models (DVC):
+**4. DVC (data and model weights).** Set your token with `--local`, which writes it to `.dvc/config.local`, a file that is never committed.
 
 ```
 pip install "dvc[s3]"
 dvc remote modify origin --local access_key_id YOUR_DAGSHUB_TOKEN
 dvc remote modify origin --local secret_access_key YOUR_DAGSHUB_TOKEN
-dvc pull
 ```
 
-### Requirements files
+Pull only what you need. A plain `dvc pull` downloads everything, including about 1 GB of vision datasets.
 
-| File | For | Installed in CI |
-|---|---|---|
-| `requirements.txt` | the API alone (light Docker image) | yes |
-| `requirements-dev.txt` | tests, lint, DVC, MLflow | yes |
-| `requirements-policy.txt` | policy agent: embeddings, Chroma, PDF reading | no (heavy) |
-| `requirements-vision.txt` | vision agent: PyTorch, Ultralytics | no (heavy) |
-| `requirements-ui.txt` | Streamlit page | no |
-| `requirements-docker.txt` | runtime libraries of the real agents, for the full Docker image | no |
+| To... | Pull |
+|---|---|
+| run the API with the real agents | `dvc pull models/vision/yolov8s_merged_e30.pt.dvc data/policy/processed.dvc` |
+| rebuild the policy clauses from the PDFs | `dvc pull data/policy/raw.dvc` |
+| evaluate the policy agent | `dvc pull data/policy/eval_claims.csv.dvc` |
+| evaluate the NLP agent | `dvc pull data/nlp/synthetic_claims_v3.csv.dvc data/nlp/sprint2_test.csv.dvc` |
+| train the vision model / use test photos in the UI | `dvc pull data/vision/car_dent_scratch_merged.dvc` (training) or `data/vision/car_dent_scratch_split.dvc` (test images), about 355 MB each |
 
-Install the heavy files only for the agent you work on. Without them the API still runs: a missing agent is replaced by a stub and the claim is sent to human review.
-
-## Run
-
-```
-uvicorn api.main:app --reload        # API on http://127.0.0.1:8000/docs
-streamlit run ui/app.py              # claims page (needs requirements-ui.txt and the API running)
-docker compose up --build -d         # API with the real agents in Docker (see "Run with Docker")
-pytest                               # tests
-ruff check .                         # lint
-```
-
-API routes:
-
-- `GET /health` – is the service up.
-- `POST /claims` – a claim in, a `Decision` out (approve / reject / human_review + reasons).
-- `POST /claims/analyze` – same pipeline, returns every agent's result and which agents were real or stubs.
-
-## Policy agent (RAG)
+**5. Policy index (once, after `dvc pull data/policy/processed.dvc`).**
 
 ```
 pip install -r requirements-policy.txt
-dvc pull data/policy                          # PDFs + clauses
-python -m agents.policy.chunking              # PDFs -> data/policy/processed/clauses.jsonl
-python -m agents.policy.index                 # clauses -> Chroma index in data/policy/chroma/
+python -m agents.policy.index           # clauses -> Chroma index in data/policy/chroma/ (local, never committed)
 ```
 
-The Chroma index is rebuilt locally (never committed, never pushed). Settings: `agents/policy/config.yaml`.
-
-How it decides (text and photos must agree; the rules decide, the LLM only explains):
-
-1. An exclusion in the text (alcohol, no licence, racing, intentional damage) → `covered = None`, a human decides.
-2. The cause is read from the text (collision, vol, incendie, bris de glace, vandalisme, catastrophe naturelle). The damages seen by vision must be compatible with it, else `covered = None`. No cause in the text → the guarantee is deduced from the damages.
-3. The formula (`TR` / `TIERS`) decides `covered = True / False`; the clauses of the guarantee and its exclusions are returned as evidence.
-4. Phi-3.5-mini writes the answer in French and cites the clause ids. If it contradicts the rule → `covered = None`. If Ollama is not reachable or too slow → template answer (`model_version` says which).
-
-Answer generation with Ollama (optional – without it the agent uses the template):
+**6. Local LLM for the policy answers (optional).** Install [Ollama](https://ollama.com), pull a model, and put its name in `agents/policy/config.yaml` under `llm.model`. The team plans to use a Qwen model; the exact model is not chosen yet, and the file currently says `phi3.5`. Without Ollama, the agent writes a template answer, and its `model_version` ends with `+template` instead of the model name.
 
 ```
-ollama pull phi3.5                            # once, about 2.2 GB
-ollama serve                                  # if the Ollama app is not already running
+ollama pull <model-name>
 ```
 
-Evaluation on the 30 labelled claims of `data/policy/eval_claims.csv` (logged to MLflow, experiment `claimspilot-policy`):
+## How to run
 
 ```
-python -m agents.policy.evaluate              # add --no-llm for template answers only
+uvicorn api.main:app --reload                 # API -> http://127.0.0.1:8000/docs
+streamlit run ui/app.py                       # claims page (needs requirements-ui.txt + the API running)
+python -m pytest                              # all tests (no model or dataset is downloaded)
+ruff check .                                  # lint
+python -m agents.policy.evaluate              # policy evaluation -> MLflow (--no-llm: template only, --no-mlflow)
+python -m agents.nlp.evaluate                 # NLP evaluation -> MLflow (--dataset <csv>)
+python -m agents.vision.demo                  # vision agent on 3 test photos
 ```
 
-## Run with Docker
+Useful environment variables: `OLLAMA_HOST` (default `http://localhost:11434`), `CLAIMSPILOT_API_URL` and `CLAIMSPILOT_UPLOADS` for the UI, `DECISION_CONFIG` (path of the decision rules file).
+
+### API endpoints
+
+| Route | In | Out |
+|---|---|---|
+| `GET /health` | — | `{"status": "ok"}` |
+| `POST /claims` | `ClaimInput` (JSON) | `Decision`: `approve / reject / human_review`, confidence, reasons |
+| `POST /claims/analyze` | `ClaimInput` | every agent's result + `agents`: which agents were `real` or `stub (reason)`, and how the decision was made (`langgraph`, `rules (fallback: <error>)`, `safety: stub used`, `safety: decision failed (...)`) |
+
+Example body:
+
+```json
+{"claim_id": "C-001", "photo_paths": ["data/uploads/c1_front.jpg"],
+ "text": "Collision sur un parking, le pare-chocs avant est enfoncé.",
+ "policy_id": "AXA-TR", "language": "fr"}
+```
+
+`photo_paths` are paths the API can read on its own disk. `policy_id` = insurer (`AXA` or `SANLAM`) + formula (`TR` or `TIERS`).
+
+### Docker
 
 One `Dockerfile`, two images:
 
 | Target | Built by | Contains | Agents |
 |---|---|---|---|
-| `light` | CI (`docker build --target light .`) | API + agent code only | NLP real, vision and policy stubs → every claim goes to human review |
-| `full` | `docker compose build` | + PyTorch CPU, Ultralytics, sentence-transformers, Chroma | all real |
+| `light` (default) | CI: `docker build --target light -t claimspilot-api .` | API + agent code, no heavy library | NLP real; vision and policy are stubs, so every claim goes to human review (safety rule) |
+| `full` | `docker compose build` | + PyTorch CPU, Ultralytics, sentence-transformers, Chroma, LangGraph | all real (weights and policy data mounted from your disk) |
 
-Model weights and policy data are never inside the image: they are mounted from your disk.
+CI builds only the light image. Build the full image locally:
 
 ```
 dvc pull models/vision/yolov8s_merged_e30.pt.dvc data/policy/processed.dvc
-docker compose build                                            # long the first time (several GB)
-docker compose run --rm api python -m agents.policy.index       # builds the policy index
+docker compose build                                          # long the first time (several GB)
+docker compose run --rm api python -m agents.policy.index     # builds the policy index
 docker compose up -d
 curl http://localhost:8000/health
 ```
 
-- Photos: put them in `data/uploads/` and send paths like `data/uploads/c1_front.jpg` (the folder is mounted in the container).
-- Ollama runs on your machine, not in Docker: the container reaches it at `host.docker.internal:11434`.
-- Which agents were real for a claim: field `agents` of `POST /claims/analyze`.
+Model weights and data are never copied into the image: they are mounted as volumes. Ollama runs on the host, and the container reaches it at `host.docker.internal:11434`. Photos go in `data/uploads/` (mounted).
 
 ## Team workflow
 
-- Start each task: `git checkout main` → `git pull` → `git checkout -b feat/<area>-<desc>`
-- `main` is protected: pull request + green CI + one approval. Never push to `main`, never work from a fork.
-- Data and model weights go through DVC, never Git.
-- Every training / evaluation run is logged to the shared MLflow (https://dagshub.com/Mohamed-G11/ClaimsPilot.mlflow) with the tags `owner`, `git_commit`, `data_version`, `sprint` – use `mlops/tracking.py`.
-- Data contracts between agents: `claimspilot/schemas.py`. Team rules for AI assistants: `AGENTS.md` (same content in `CLAUDE.md`).
-- Progress: `docs/progress/<name>.md`, updated with every PR. Mohamed's detailed build log: `docs/build-log/mohamed.md`.
+- **Branches:** `git checkout main` → `git pull` → `git checkout -b <type>/<area>-<desc>` (e.g. `feat/vision-agent`). Never push to `main`, never work from a fork.
+- **Pull requests:** `main` is protected. A PR needs green CI (ruff + pytest, then a light Docker build and `/health` smoke test) and one teammate's approval. Commit messages follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, `refactor:`).
+- **Data and weights:** DVC only (`dvc add` → commit the `.dvc` file → `dvc push`), never Git. Only final datasets and final weights.
+- **Experiments:** every training or evaluation run goes to the shared MLflow, experiments `claimspilot-vision`, `-nlp`, `-policy`, `-decision`. Required tags: `owner`, `git_commit`, `data_version` (DVC md5), `sprint`. Use `from mlops.tracking import start_run`.
+- **Tests:** they never download weights, datasets or LLMs (fakes, or skipped when a file or library is missing), so CI stays fast.
+- **Team rules** (ownership, data contracts, rules for AI assistants): `AGENTS.md` (identical copy: `CLAUDE.md`). Progress notes: `docs/progress/<name>.md`. Mohamed's detailed build log: `docs/build-log/mohamed.md`.
+
+## Roadmap
+
+- Sprint 3 (Nov 16–22): integration. Done: real agents in the API, decision agent plugged in, Streamlit page. Planned: Langfuse tracing (`Decision.trace_id` is empty today), choice of the Qwen model for the policy answers.
+- Sprint 4 (Nov 23–29): monitoring (Evidently), evaluation (RAGAS for the policy answers, NLP held-out set), demo. Code freeze two days before the presentation.
+- Not in scope: Airflow (retraining = script / GitHub Actions). Grafana only if time remains.
 
 ## Repository structure
 
 ```
-agents/        vision/, nlp/, policy/, decision/
-api/           FastAPI service (routes + pipeline with stub fallback)
-claimspilot/   shared schemas
-mlops/         MLflow helper and scripts
-ui/            Streamlit claims page
-data/ models/  DVC-tracked (not in Git)
-notebooks/     exploration
-tests/         pytest
-docs/          progress notes and build log
+agents/          vision/, nlp/, policy/, decision/   (one run() per agent)
+api/             FastAPI app (main.py) + pipeline (agents, stub fallback, decision)
+claimspilot/     shared schemas (data contracts)
+ui/              Streamlit claims page
+mlops/           MLflow helper (required tags) and connection check
+data/, models/   DVC-tracked (only the .dvc pointer files are in Git)
+notebooks/       vision EDA, NLP error analysis (outputs cleared)
+tests/           pytest, one folder per area + API / end-to-end tests
+docs/            progress notes and build log
+Dockerfile, docker-compose.yml, .github/workflows/ci.yml
 ```
