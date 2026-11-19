@@ -866,6 +866,76 @@ To try in sprint 4, measured with the same command: give the verdict in the prom
 
 ---
 
+## Entry 10 — Task 2: Docker full stack (ollama + api + ui)
+
+**Date:** 2026-11-20 · **Branch:** `feat/docker-full-stack` (stacked on `feat/policy-llm-choice`) · **Commits:** `4e8a07a`, `ee645e8`, this entry
+**Goal:** one `docker compose up` runs Ollama, the API with the real agents and the Streamlit UI; the policy answer comes from qwen2.5:7b inside Docker.
+
+### What existed before
+
+- `Dockerfile`: 3 stages, `base` (python:3.11-slim + `requirements.txt` + healthcheck + uvicorn), `full` (+ CPU PyTorch, `requirements-docker.txt`, `requirements-decision.txt`), `light` (CI). Never built locally before today.
+- `docker-compose.yml`: a single `api` service (target `full`) calling the **host** Ollama at `host.docker.internal:11434`; volumes `./models`, `./data/policy`, `./data/uploads`, `model-cache`.
+- `.dockerignore` excluded `ui/` (the UI had no image).
+- `api/`: `/health`, `/claims`, `/claims/analyze`; the pipeline needs no change for Docker.
+- `agents/policy/generation.py`: `OLLAMA_HOST` (env) already overrode `llm.host` at each call; the model came only from `config.yaml`.
+- `ui/app.py` (Wiem): already reads `CLAIMSPILOT_API_URL` (default `http://localhost:8000`) and `CLAIMSPILOT_UPLOADS`; it saves uploaded photos in that folder and sends their **absolute paths** to `POST /claims` (timeout 120 s).
+
+### Files, in order
+
+1. `agents/policy/settings.py`: `apply_env_overrides()`, where `POLICY_LLM_MODEL` (if set and not empty) replaces `llm.model`. Unset, nothing changes. `OLLAMA_HOST` stays where it was (`generation.py`, read at each call). Tests: `tests/policy/test_settings.py` (override / unset / empty) and `tests/policy/test_generation.py` (`OLLAMA_HOST` used for the request URL / config host when unset).
+2. `Dockerfile`: new stage `ui` (python:3.11-slim + `requirements-ui.txt` + `ui/`, port 8501, healthcheck on `/_stcore/health`, `streamlit run --server.headless`). Independent of the API stages, so it stays small (595 MB). `light` stays the last stage (CI default).
+3. `.dockerignore`: `ui` removed from the list (the `ui` stage needs it).
+4. `docker-compose.yml`: 3 services.
+   - `ollama`: `ollama/ollama:0.40.16` (**pinned to the same version as the host Ollama**, so it reads the same model files), CPU only, port 11434, volume `${OLLAMA_MODELS_DIR:-./data/ollama/models}:/root/.ollama/models`, `OLLAMA_NOPRUNE=1` (never deletes blobs in your shared folder), healthcheck `ollama list`.
+   - `api`: target `full`, port 8000, `models/vision` (read-only) + `data/policy` + `data/uploads` + `model-cache`, `env_file: .env` (`required: false`, so CI without `.env` still validates), `OLLAMA_HOST=http://ollama:11434`, starts when `ollama` is healthy, healthcheck `/health`.
+   - `ui`: target `ui`, port 8501, `CLAIMSPILOT_API_URL=${CLAIMSPILOT_API_URL:-http://api:8000}`, `CLAIMSPILOT_UPLOADS=/app/data/uploads` with the same `./data/uploads` volume as `api` (the UI sends absolute paths, so both containers must see the photo at the same path), starts when `api` is healthy.
+5. `.env.example`: `OLLAMA_MODELS_DIR=` documented. `.gitignore`: `data/ollama/` (the default, empty models folder).
+6. `README.md`: Docker section rewritten (3 images, 3 services, commands, memory, host-Ollama port note); the LLM setup lines now say `qwen2.5:7b` and `POLICY_LLM_MODEL`.
+
+### Checks (all passed)
+
+The stack was started with `OLLAMA_MODELS_DIR=C:/Users/moham/.ollama/models` set **in the shell only** (I may not edit `.env`; see question 1).
+
+| Check | Result |
+|---|---|
+| `docker compose up --build -d` | ollama healthy → api healthy → ui healthy (in about 1 min) |
+| `GET /health` | `{"status":"ok"}` |
+| From the api container: `http://ollama:11434/api/tags` | `['qwen3:4b', 'qwen2.5:7b']`: host models reused, nothing downloaded |
+| `POST /claims/analyze`, claim `DOCKER-CHECK-1` (AXA-TR, "Collision sur un parking, le pare-chocs avant est enfoncé.", one real test photo) | agents `vision/nlp/policy = real`, **decision status `langgraph`**; vision front_bumper/dent 0.89; NLP consistent 1.0; policy `covered=True`, `model_version = policy-rag-v2+qwen2.5:7b` (**LLM answer, not template**): "Décision : COUVERT [AXA-015]. Le sinistre est couvert par la garantie dommage collision, car il s'agit d'une collision sur un parking, …"; decision **approve 0.887** |
+| Time | first (cold) claim **4 min 47 s** (embedding model download into the volume + qwen2.5:7b load + YOLO load); warm claim **15.8 s** |
+| Memory (`docker stats`) | ollama 4.9 GB, api 0.9 GB, ui 55 MB, limit 7.4 GB (WSL default = 50 % of 16 GB). No container killed |
+| Port 8501 | HTTP 200, `/_stcore/health` = ok |
+| `ruff check .` / `pytest` | clean / **205 passed** (the vision integration test now runs: test images pulled) |
+
+The photo: I ran `dvc pull data/vision/car_dent_scratch_split/test/images` (366 images, 52 MB, ignored by git) and copied `back_light-1---92-…2883….jpg` to `data/uploads/check/front_bumper.jpg`. The stack is **left running**.
+
+### Things to know
+
+- **I started the host Ollama by accident.** Running `ollama list` on the host to check the models launched the Ollama app (it was not running before). It now listens on `127.0.0.1:11434` (PID 12900 at the time). My attempt to list and stop it was blocked by the permission system, so I left it. It did not prevent the container from publishing 11434, but two Ollama servers with qwen2.5:7b loaded would double the memory. You can quit it from the tray icon.
+- The `ollama/ollama:0.40.16` image is 5.1 GB (downloaded once).
+
+### Concepts
+
+- **Service name as host name**: inside compose, containers reach each other by service name (`http://ollama:11434`, `http://api:8000`), not `localhost`.
+- **`depends_on: condition: service_healthy`**: a container starts only when the healthcheck of the one it needs passes, so the API never starts before Ollama answers.
+- **Bind-mounting the host models folder**: the container reuses the 4.7 GB model already on disk instead of downloading it again. The version pin keeps the file format identical.
+
+### How to check
+
+```
+docker compose ps                        # 3 x healthy
+curl http://localhost:8000/health
+# open http://localhost:8501 and send a claim with one of the test photos
+```
+
+### Open questions for Mohamed
+
+1. **Add `OLLAMA_MODELS_DIR=C:/Users/moham/.ollama/models` to your `.env`.** I could not edit it. Without it, a later `docker compose up` (without my shell variable) mounts the empty default folder and the policy agent falls back to the template answer.
+2. **UI timeout (Wiem's file):** `ui/app.py` waits 120 s for `/claims`; the first claim after a cold start took 4 min 47 s, so it would show an error in the UI (the next ones take ~16 s). Options: Wiem raises the timeout, or we warm the models at API start (my side, `api/`). Not decided.
+3. **Test photos in the UI container:** the UI's "test photos from the dataset" list reads `data/vision/car_dent_scratch_split/test/images`, which is not mounted in Docker (the list is empty there). Mounting it in `ui` and `api` at the same path would enable it, but creates empty folders when the images are not pulled. Not done.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
