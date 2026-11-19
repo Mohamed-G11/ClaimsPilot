@@ -739,6 +739,50 @@ Tests added in `tests/test_claims.py`: stub used → human_review, confidence 0.
 
 ---
 
+## Entry 8 — README and AGENTS.md match the real project
+
+**Date:** 2026-11-19 · **Branch:** `docs/update-readme-agents` (from `main`) · **Commit:** `dcd2245`
+**Goal:** documentation only, no code change: README.md and AGENTS.md (+ its copy CLAUDE.md) describe what really exists on `main`, not the old sprint 2 plan.
+
+**Why:** both files still described the old state: decision rules in `api/pipeline.py` ("LangGraph agent in sprint 3"), Phi-3.5 as a fixed choice, sprint 2 targets, an old ownership table. A new teammate, the teacher or a recruiter reading them would get a wrong picture.
+
+### Merge of `origin/main` first
+
+When the task started, `main` did not contain `feat/api-decision-agent`, so the new decision flow was not on `main` yet. You merged it on GitHub (PR #25). Then `git fetch` + `git merge origin/main` into `docs/update-readme-agents` (fast-forward to `c5cea24`). I checked that `api/pipeline.py` has `make_decision()` and `requirements.txt` has `pyyaml==6.0.3` before writing the decision flow as the current one.
+
+Tests: 175 passed, 1 skipped on `main` before the merge; **184 passed, 1 skipped** after it (LangGraph installed in `.venv`). `ruff check .` clean.
+
+### Files, in order
+
+1. `README.md` (rewritten), for a new teammate, the teacher or a recruiter:
+   - what ClaimsPilot does + a text diagram: vision (YOLOv8s) → NLP → policy RAG (AXA + SANLAM) → decision (stub safety rule → LangGraph agent → rules fallback → human_review if both fail);
+   - agents table with owners (Wiem: vision, decision agent, UI · Hend: NLP · Mohamed: platform, API, policy);
+   - **metrics with what each is measured on**: vision 0.385 mAP50 on the test split (366 unseen images), the only independent number; NLP ≈ 97 % / macro F1 0.865 on 220 synthetic dev claims; policy 96.7 % / 80 % top-4 on my own 30 claims. NLP held-out set and LLM answers written as "planned";
+   - setup from zero on Windows: venv, which requirements file for what, `.env`, DVC token with `--local`, a table "to do X, pull only these `.dvc` files", policy index, Ollama with `<model-name>` (Qwen planned, config still says `phi3.5`);
+   - how to run (API, UI, tests, evaluations, vision demo), env variables, the 3 endpoints with an example body, Docker light / full, team workflow, roadmap, links.
+2. `AGENTS.md`: ownership updated (decision agent + `ui/` = Wiem, policy = Mohamed; I also listed what you already maintain: root `tests/test_*.py`, `tests/mlops/`, `.dockerignore`, `docs/build-log/`), schemas copied exactly from `claimspilot/schemas.py` (with `PARTS` and the `Field(ge=0, le=1)` checks), agent signatures as in the code (policy `run()` has 2 optional test-only arguments), the decision flow with its exact status strings and the decision rules, timeline (sprint 3 Nov 16–22 integration, sprint 4 Nov 23–29 monitoring / evaluation / demo, code freeze), scope (Qwen via Ollama, no Airflow, Grafana only if time), rules (never push to `main`, DVC, MLflow tags, tests without downloads). Removed: Phi-3.5 as a fixed choice and the old sprint 2 targets, replaced by a "current state and next work" table (Evidently owner: "to decide", nobody is assigned).
+3. `CLAUDE.md`: identical copy of `AGENTS.md` (checked byte for byte with `cmp`).
+
+### Concepts
+
+- **Docs describe the code, not the plan**: anything not built is written "planned". Each metric says what data it was measured on, because a number on your own data is optimistic.
+- **Pull only what you need with DVC**: `dvc pull <file>.dvc` instead of `dvc pull`, which downloads everything (about 1 GB of vision datasets).
+
+### Found but not changed (not my files or out of scope)
+
+1. **`docs/progress/wiem.md`** has two stray lines left over from an old merge (` feat/decision-agent` and `main`), around her 2026-11-13 entries. Wiem's file: tell her.
+2. **Hend's NLP evaluation scripts need `scikit-learn`** (`agents/nlp/evaluate.py`, `data/nlp/evaluate_sprint2.py`), which is in no requirements file. The README says `pip install scikit-learn` for now. Hend could add a `requirements-nlp.txt`.
+3. **`agents/policy/config.yaml` still says `llm.model: phi3.5`.** The docs say "Qwen planned". Change the model name once you have chosen the Qwen model.
+
+### How to check
+
+```
+git diff c5cea24 -- README.md AGENTS.md CLAUDE.md
+cmp AGENTS.md CLAUDE.md        # no output = identical
+```
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
