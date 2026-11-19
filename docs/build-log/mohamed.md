@@ -1035,6 +1035,48 @@ python -m pytest tests/test_tracing.py -q
 
 ---
 
+## Entry 13 — Fix: LLM warm start, keep-alive, test photos in Docker
+
+**Date:** 2026-11-20 · **Branch:** `fix/llm-warm-start` (stacked on `feat/langfuse-tracing`) · **Commits:** `6f43c7f`, `e0ce686`, this entry
+**Goal (your answers to entry 10 q2–q3 and entry 11 q1):**
+- warm the policy LLM when the API starts (non-blocking, failure only logged);
+- `OLLAMA_KEEP_ALIVE=24h`;
+- mount the dataset test photos read-only in `api` and `ui`.
+
+No timeout was changed.
+
+### Files, in order
+
+1. `api/warmup.py` (new):
+   - `warm_policy_llm()` makes one short call ("Réponds seulement : OK.") with the policy agent's generator. It never raises; a failure is logged as a WARNING;
+   - `start_warmup()` runs it in a daemon thread. `CLAIMSPILOT_WARMUP=0` turns it off.
+2. `api/main.py`: a FastAPI `lifespan` calls `warmup.start_warmup()` at startup. The API does not wait for it.
+3. `tests/conftest.py`: also sets `CLAIMSPILOT_WARMUP=0` for every test. `tests/test_warmup.py` (new, 5 tests): one call, failure only logged, switch off, background daemon thread, startup launches it.
+4. `docker-compose.yml`:
+   - `ollama`: `OLLAMA_KEEP_ALIVE: 24h`;
+   - `api` and `ui`: `./data/vision/car_dent_scratch_split/test/images` mounted read-only at `/app/data/vision/car_dent_scratch_split/test/images`. It must be the same path in both, because the UI sends the photo's absolute path to the API.
+
+### Check on the Docker stack (rebuilt, all 3 containers recreated)
+
+| Check | Result |
+|---|---|
+| API startup | healthy after **6 s**: the warm-up does not block |
+| `ollama /api/ps` with no claim sent | `qwen2.5:7b` loaded **30 s** after start, `expires_at` = 24 h later |
+| Test photos | 366 jpg visible in `api` and `ui`, read-only; the UI's sample list sees 366 photos |
+| First claim after the restart (`WARM-CHECK-1`, dataset photo path as the UI sends it) | **69.5 s**, all agents real, decision `langgraph`, policy `+qwen2.5:7b` (LLM, not the template), approve, trace `a6a5af1e691916dc56b3107e7ff7d50c`. Before the fix: 188 s and a template fallback (entry 11). The remaining time is YOLO and the embedding model loading in the API, not the LLM |
+| `ruff` / `pytest` | clean / **219 passed** |
+
+### Concepts
+
+- **Warm-up**: pay the model-loading cost when the service starts, not on the first user's request.
+- **Keep-alive**: Ollama unloads an idle model after 5 min by default. 24 h keeps it in memory (~5 GB) all day.
+
+### Note
+
+If the first claim must also be fast for vision and retrieval, the same warm-up could load YOLO and the embedding model. Not done: you asked for the LLM only.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
