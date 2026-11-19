@@ -936,6 +936,90 @@ curl http://localhost:8000/health
 
 ---
 
+## Entry 11 — Task 3: Langfuse tracing (cloud)
+
+**Date:** 2026-11-20 · **Branch:** `feat/langfuse-tracing` (stacked on `feat/docker-full-stack`) · **Commits:** `6ed3cc1`, `5e35e01`, `9f94310`, this entry
+**Goal:** one Langfuse trace per claim, one observation per step, optional and safe.
+
+### SDK facts used (official docs + the installed package)
+
+- **langfuse 5.2.0** (latest on PyPI), pinned in the new `requirements-tracing.txt`. v5 needs Python 3.11+ and Langfuse Cloud (or self-hosted v4.59+).
+- Env vars: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, **`LANGFUSE_BASE_URL`**. `LANGFUSE_HOST` still works but is marked **deprecated** in the SDK. Your `.env` already uses `LANGFUSE_BASE_URL` (the task text said `LANGFUSE_HOST`), so `.env.example` documents `LANGFUSE_BASE_URL`, and the code also accepts `LANGFUSE_HOST`.
+- API: `start_as_current_observation(as_type="span" | "generation" | "retriever", name=…, input=…, model=…, model_parameters=…, usage_details=…)`, `propagate_attributes(trace_name=…, metadata=…, tags=…)`, `langfuse.langchain.CallbackHandler`. Removed in v5: `update_current_trace`, `api.trace.get` (the replacement is `api.observations.get_many`).
+- Without keys the SDK turns itself into a no-op client. Export runs in a background thread.
+
+### Files, in order
+
+1. `api/tracing.py` (new):
+   - `enabled()` = library installed + both keys + `CLAIMSPILOT_TRACING` not `"0"`;
+   - `client()` builds the client once (timeout 5 s);
+   - `observe()` is a context manager that never raises because of Langfuse; errors of the code inside are re-raised after marking the observation `ERROR`;
+   - `claim_trace()` is the root observation, with the trace name = `claim_id`, tag `claimspilot` and metadata `claim_id`;
+   - `langchain_callbacks()`: see "Wiem's LangGraph agent" below.
+2. `agents/policy/generation.py`: `ollama_call()` returns the text + model + token counts (`prompt_eval_count`, `eval_count`); `ollama_generate()` is unchanged for its callers.
+3. `api/pipeline.py`:
+   - `analyze_claim()` runs inside `claim_trace()`; `vision`, `nlp`, `policy` and `decision` are child observations (output = result + status);
+   - when tracing is on, the policy agent gets traced wrappers: `policy retrieval` (type retriever: query, insurer, guarantees → clause ids + relevance) and `policy LLM call` (generation: model, prompt, model parameters, answer, token usage; latency = observation duration). An LLM that is unavailable is a `WARNING` (the template is used), not an `ERROR`;
+   - trace output = decision, confidence, status; `Decision.trace_id` is filled, so `/claims` and the UI get it;
+   - **tracing off = the exact old calls** (`run(claim, vision)` without wrappers).
+4. `tests/conftest.py` (new): before **every** test, removes the Langfuse env vars, sets `CLAIMSPILOT_TRACING=0` and drops the cached client. This was needed: `mlops/tracking.py` loads `.env` into the environment during some tests, and one pytest run did turn tracing on with your real keys (see "Things to know").
+5. `tests/test_tracing.py` (new, 9 tests, fake client): off without keys, kill switch, no `trace_id` when off, the full tree (root + 4 steps + retrievals + generation under `policy`), token usage, `WARNING` on a template fallback, a broken Langfuse never breaks a claim, errors inside a step are re-raised.
+6. `requirements-tracing.txt` (new), `Dockerfile` (own layer in `full`), `docker-compose.yml` (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` passed to `api`; empty = no tracing), `.env.example` (the 3 names, empty), `README.md` (section "Tracing (Langfuse)").
+
+### Wiem's LangGraph agent: no change to her files
+
+`agents.decision.agent.run()` takes no `config`, so a callback cannot be passed in the call. LangChain has a documented hook, `langchain_core.tracers.context.register_configure_hook(context_var, inheritable=True)`: every LangChain / LangGraph run adds the handler found in that context variable. `api/tracing.langchain_callbacks()` puts a Langfuse `CallbackHandler` in it only around `make_decision()`. I checked locally with a recording callback: the handler sees `LangGraph`, `vision`, `nlp`, `policy`, `decide`, and nothing after the block. **`agents/decision/` was not edited.**
+
+### Check on the running Docker stack
+
+| Claim | Result | trace id |
+|---|---|---|
+| `TRACE-CHECK-1` (first after the api restart) | all real, decision `langgraph`, approve; **policy = template**: the LLM call timed out at 150 s while Ollama reloaded qwen2.5:7b (cold) — recorded as a `WARNING` in the trace | `ab9412a9d5f2dad61d21bf00e367146b` |
+| `TRACE-CHECK-2` (warm) | all real, decision `langgraph`, approve 0.887, policy `+qwen2.5:7b`, 23 s | **`6dc53e1fee90899006ca6465b8cd9e78`** |
+
+Read back with `langfuse.api.observations.get_many(trace_id=…)`: 13 observations, trace name `TRACE-CHECK-2`, tag `claimspilot`.
+
+```
+claim (output: approve 0.8869 langgraph)                    23.3 s
+├── vision                                                   1.5 s
+├── nlp                                                      0.0 s
+├── policy                                                  21.8 s
+│   ├── policy retrieval (retriever)                         6.2 s   (first query loads the embedding model)
+│   ├── policy retrieval (retriever)                         0.1 s
+│   └── policy LLM call (generation, qwen2.5:7b)            15.4 s   usage 1056 in / 57 out / 1113 total
+└── decision (output: decision + "langgraph")                0.0 s
+    └── LangGraph → vision, nlp, policy, decide             (Wiem's nodes)
+```
+
+`ruff check .`: clean. `pytest`: **214 passed** (no Langfuse call).
+
+### Things to know
+
+- **One pytest run sent test traces to your Langfuse project** before `tests/conftest.py` existed. In that run tracing turned on with your real keys, loaded from `.env` by an earlier test. Those traces have test claim ids (`E2E-1`, `C-001`…), and you can delete them in the Langfuse UI. Since the conftest exists, tests send nothing.
+- **I printed your Langfuse public key once** (`pk-lf-…`) by mistake, inside an SDK metadata field while reading the trace name back. The secret key was never printed. A public key is not a secret in Langfuse, but you asked for no keys in the output.
+- The first `decision` observation after a restart took 24.8 s, while LangGraph itself took 0.01 s: it is the first-time import and graph build. Later claims: 0.007 s.
+
+### Concepts
+
+- **Trace / observation / generation**: a trace is one request (one claim). Observations are its steps, nested like a call tree. A generation is an observation for an LLM call, with model, prompt, answer and token usage.
+- **Context propagation**: the SDK keeps the "current" observation in a context variable (OpenTelemetry), so an observation opened inside another becomes its child automatically. The LangChain hook uses the same idea.
+- **Fail-open tracing**: monitoring must never stop the product. Every Langfuse call is wrapped, and the pipeline does not wait for the network.
+
+### How to check
+
+```
+python -m pytest tests/test_tracing.py -q
+# with the stack running and keys in .env: send a claim, then open the trace
+# whose id is in the response (decision.trace_id) in the Langfuse UI
+```
+
+### Open questions for Mohamed
+
+1. **Cold start vs `timeout_seconds: 150`.** After a restart, or after 5 min idle (Ollama's default keep-alive), the first LLM call can pass 150 s on CPU and falls back to the template (trace 1). Options (not done, you said to ask before changing the timeout): a higher timeout; `OLLAMA_KEEP_ALIVE` (e.g. `24h`) on the ollama service so the model stays loaded (uses ~5 GB RAM all the time); or a warm-up call when the API starts.
+2. **`LANGFUSE_HOST` vs `LANGFUSE_BASE_URL`**: I documented `LANGFUSE_BASE_URL` (the SDK's current name, and what your `.env` uses). OK?
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
