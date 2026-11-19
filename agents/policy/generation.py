@@ -18,6 +18,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import cache
 
 from agents.policy.rules import normalize
@@ -48,8 +49,23 @@ def no_generator(prompt: str) -> str:
     raise GeneratorUnavailable("LLM disabled")
 
 
+@dataclass
+class OllamaAnswer:
+    """The answer text plus what tracing needs (token counts from Ollama)."""
+
+    text: str
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
 def ollama_generate(prompt: str) -> str:
     """Send the prompt to the local Ollama server and return the generated text."""
+    return ollama_call(prompt).text
+
+
+def ollama_call(prompt: str) -> OllamaAnswer:
+    """Same as ollama_generate, but also returns the model and the token counts."""
     cfg = CONFIG["llm"]
     host = os.getenv("OLLAMA_HOST", cfg["host"]).rstrip("/")
     if not host.startswith("http"):
@@ -74,7 +90,8 @@ def ollama_generate(prompt: str) -> str:
     text = strip_thinking(data.get("response", ""))
     if not text:
         raise GeneratorUnavailable("Ollama returned an empty answer (or only reasoning text)")
-    return text
+    return OllamaAnswer(text=text, model=cfg["model"], input_tokens=data.get("prompt_eval_count"),
+                        output_tokens=data.get("eval_count"))
 
 
 @cache
