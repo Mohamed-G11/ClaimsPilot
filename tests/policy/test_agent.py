@@ -175,7 +175,7 @@ def test_llm_answer_is_used_when_it_agrees_with_the_rule():
     assert analysis.generator == "llm"
     assert analysis.result.covered is True
     assert analysis.result.answer.endswith("[AXA-015].")
-    assert analysis.result.model_version == "policy-rag-v2+phi3.5"
+    assert analysis.result.model_version == f"policy-rag-v2+{generation.CONFIG['llm']['model']}"
     # the LLM only sees the claim and the retrieved clauses
     assert "Collision sur un parking." in prompts[0]
     assert "[AXA-015] Dommages collision" in prompts[0]

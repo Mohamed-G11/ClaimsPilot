@@ -98,7 +98,7 @@ def test_llm_answer_is_returned_when_it_agrees(real_agents, photo):
     real_agents["llm"] = lambda prompt: "Décision : COUVERT. Collision garantie [AXA-015]."
     body = analyze(photo, COLLISION)
     assert body["policy"]["answer"].endswith("[AXA-015].")
-    assert body["policy"]["model_version"] == "policy-rag-v2+phi3.5"
+    assert body["policy"]["model_version"] == f"policy-rag-v2+{generation.CONFIG['llm']['model']}"
     assert body["decision"]["decision"] == "approve"
 
 
