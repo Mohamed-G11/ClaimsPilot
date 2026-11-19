@@ -226,3 +226,6 @@ mlruns/
 # ClaimsPilot: generated locally, never committed
 data/policy/chroma/
 data/uploads/
+
+# docker compose: default (empty) Ollama models folder
+data/ollama/
