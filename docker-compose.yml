@@ -16,6 +16,7 @@ services:
       - "11434:11434"
     environment:
       OLLAMA_NOPRUNE: "1"                       # never delete blobs in the shared models folder
+      OLLAMA_KEEP_ALIVE: 24h                    # keep qwen2.5:7b loaded (~5 GB RAM): no cold start
     volumes:
       # CPU only (no GPU reservation). Models already pulled on the host are reused.
       # Default: an empty folder in the repo (git-ignored) -> no model.
@@ -48,6 +49,9 @@ services:
       - ./models/vision:/app/models/vision:ro   # vision weights (dvc pull)
       - ./data/policy:/app/data/policy          # clauses + Chroma index
       - ./data/uploads:/app/data/uploads        # claim photos, shared with the UI
+      # dataset test photos offered by the UI (dvc pull data/vision/car_dent_scratch_split/test/images);
+      # same path in api and ui, because the UI sends the photo's absolute path
+      - ./data/vision/car_dent_scratch_split/test/images:/app/data/vision/car_dent_scratch_split/test/images:ro
       - model-cache:/cache                      # embedding model downloaded once (~0.5 GB)
     depends_on:
       ollama:
@@ -72,6 +76,7 @@ services:
       CLAIMSPILOT_UPLOADS: /app/data/uploads    # same path as in the api container
     volumes:
       - ./data/uploads:/app/data/uploads
+      - ./data/vision/car_dent_scratch_split/test/images:/app/data/vision/car_dent_scratch_split/test/images:ro
     depends_on:
       api:
         condition: service_healthy
