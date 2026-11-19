@@ -61,7 +61,8 @@ def test_consistent_covered_claim_is_approved_by_real_agents(real_agents, photo)
     assert {k: body["agents"][k] for k in ("vision", "nlp", "policy")} == {
         "vision": "real", "nlp": "real", "policy": "real"}
     # LangGraph when installed (full image), else the decision agent's rules (CI)
-    assert body["agents"]["decision"] in {"langgraph", "rules (fallback)"}
+    decision_status = body["agents"]["decision"]
+    assert decision_status == "langgraph" or decision_status.startswith("rules (fallback: ")
     assert body["vision"]["damages"][0]["part"] == "front_bumper"
     assert body["nlp"]["consistency"] == "consistent"
     assert body["policy"]["covered"] is True

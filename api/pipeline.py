@@ -9,7 +9,8 @@ Decision (see make_decision):
    invented), and Wiem's decision agent is not called;
 2. otherwise Wiem's LangGraph decision agent (agents/decision/agent.py);
 3. if LangGraph is not installed or the agent fails: Wiem's pure rules
-   (agents/decision/rules.py), the same rules the graph applies.
+   (agents/decision/rules.py), the same rules the graph applies;
+4. if those rules fail too: human review (confidence 0.0), never an HTTP 500.
 """
 import importlib.util
 import logging
@@ -70,7 +71,8 @@ class ClaimAnalysis(BaseModel):
     policy: PolicyResult
     decision: Decision
     # vision / nlp / policy -> "real" or "stub (reason)";
-    # decision -> "langgraph", "rules (fallback)" or "safety: stub used"
+    # decision -> "langgraph", "rules (fallback: <error type>)", "safety: stub used"
+    #             or "safety: decision failed (<agent error>, <rules error>)"
     agents: dict[str, str]
 
 
@@ -133,7 +135,18 @@ def make_decision(claim: ClaimInput, vision: VisionResult, nlp: NLPResult,
         return decision_agent.run(claim, vision, nlp, policy), "langgraph"
     except Exception as error:  # noqa: BLE001 - langgraph not installed, graph error...
         logger.warning("decision agent unavailable, using its rules: %s", error)
-        return decision_rules.decide(claim, vision, nlp, policy), "rules (fallback)"
+        agent_error = type(error).__name__
+    try:
+        decision = decision_rules.decide(claim, vision, nlp, policy)
+        return decision, f"rules (fallback: {agent_error})"
+    except Exception as error:  # noqa: BLE001 - config missing or invalid...
+        # Never a 500 and never an automatic answer: a human decides.
+        logger.error("decision rules failed too, sending to human review: %s", error)
+        reason = (f"no automatic decision: the decision agent ({agent_error}) and its "
+                  f"rules ({type(error).__name__}: {error}) both failed")[:300]
+        decision = Decision(claim_id=claim.claim_id, decision="human_review",
+                            confidence=0.0, reasons=[reason])
+        return decision, f"safety: decision failed ({agent_error}, {type(error).__name__})"
 
 
 def analyze_claim(claim: ClaimInput) -> ClaimAnalysis:

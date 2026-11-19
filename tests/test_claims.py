@@ -205,7 +205,7 @@ def test_langgraph_missing_falls_back_to_the_same_rules(monkeypatch, change):
     with_agent = decision_rules.decide(claim, vision, nlp, policy)  # what the graph applies
     monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
     decision, how = make_decision(claim, vision, nlp, policy, stubs=[])
-    assert how == "rules (fallback)"
+    assert how == "rules (fallback: ModuleNotFoundError)"
     assert decision == with_agent
 
 
@@ -215,7 +215,7 @@ def test_real_langgraph_agent_matches_the_fallback(monkeypatch):
     decision, how = make_decision(claim, vision, nlp, policy, stubs=[])
     assert how == "langgraph"
     monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
-    assert make_decision(claim, vision, nlp, policy, stubs=[]) == (decision, "rules (fallback)")
+    assert make_decision(claim, vision, nlp, policy, stubs=[]) == (decision, "rules (fallback: ModuleNotFoundError)")
 
 
 def test_analyze_reports_how_the_decision_was_made(fake_real_agents, decision_agent_calls,
@@ -223,7 +223,7 @@ def test_analyze_reports_how_the_decision_was_made(fake_real_agents, decision_ag
     assert client.post("/claims/analyze", json=CLAIM).json()["agents"]["decision"] == "langgraph"
     monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
     body = client.post("/claims/analyze", json=CLAIM).json()
-    assert body["agents"]["decision"] == "rules (fallback)"
+    assert body["agents"]["decision"] == "rules (fallback: ModuleNotFoundError)"
     assert body["decision"]["decision"] == "approve"
 
 
@@ -231,3 +231,26 @@ def test_analyze_reports_the_stub_safety_rule(no_real_agents, decision_agent_cal
     body = client.post("/claims/analyze", json=CLAIM).json()
     assert body["agents"]["decision"] == "safety: stub used"
     assert decision_agent_calls == []
+
+
+def _config_missing(*_args):
+    raise FileNotFoundError("agents/decision/config.yaml")
+
+
+def test_rules_failing_too_goes_to_human_never_500(monkeypatch):
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    monkeypatch.setattr(decision_rules, "decide", _config_missing)
+    decision, how = make_decision(*_results(), stubs=[])
+    assert decision.decision == "human_review"
+    assert decision.confidence == 0.0
+    assert "both failed" in decision.reasons[0]
+    assert how == "safety: decision failed (ModuleNotFoundError, FileNotFoundError)"
+
+
+def test_rules_failing_too_still_answers_over_http(fake_real_agents, monkeypatch):
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    monkeypatch.setattr(decision_rules, "decide", _config_missing)
+    response = client.post("/claims/analyze", json=CLAIM)
+    assert response.status_code == 200
+    assert response.json()["decision"]["decision"] == "human_review"
+    assert response.json()["agents"]["decision"].startswith("safety: decision failed")
