@@ -1020,6 +1020,21 @@ python -m pytest tests/test_tracing.py -q
 
 ---
 
+## Entry 12 — Task 4: options for the user-facing app (proposal, not committed)
+
+**Date:** 2026-11-20 · **File:** `docs/proposals/app-options.md`, **left uncommitted on purpose** (untracked file on your disk, you decide with the team) · no code change
+
+**What it is:** a comparison of 4 options for the final app: (a) improve the existing Streamlit UI, (b) a web app (React or plain HTML/JS) calling the FastAPI, (c) a PWA, (d) a native or Flutter mobile app. For each: what the user sees, effort in days (rough estimates), API changes, Docker impact, demo risk, owner, pros and cons. No recommendation.
+
+**Facts from the code that drive the comparison:**
+- the API has no CORS, no authentication and **no photo upload**: `photo_paths` are paths on the API's disk, and the Streamlit page works only through the shared `data/uploads` folder. Options (b), (c) and (d) need an upload endpoint first (`api/`, Mohamed);
+- the cited clauses (`PolicyResult.clauses`) are only returned by `/claims/analyze`, and the Streamlit page calls `/claims`, so it does not show them today;
+- a warm claim takes 16–23 s; a cold start can take minutes, so every UI needs a clear waiting state or an asynchronous flow.
+
+**Open questions (also at the end of the proposal):** demo on a laptop browser only, or on a phone? Who is the demo user: the customer or the claims handler? If not (a), the upload endpoint and CORS must be planned at the start of sprint 4.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
