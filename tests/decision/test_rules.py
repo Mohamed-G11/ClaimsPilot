@@ -68,7 +68,7 @@ def test_review_rules(kwargs, expected_reason):
 
 
 def test_uncertain_text_is_configurable():
-    assert decide(n=nlp("uncertain")).decision == "approve"  # default: off
+    assert decide(n=nlp("uncertain")).decision == "human_review"  # default: on (set by Mohamed, safety)
     cfg = rules.load_config()
     strict = {**cfg, "rules": {**cfg["rules"], "review_if_uncertain": True}}
     assert decide(n=nlp("uncertain"), cfg=strict).decision == "human_review"
