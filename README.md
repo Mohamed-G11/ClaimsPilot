@@ -192,6 +192,18 @@ Then open http://localhost:8501 (claims page) or http://localhost:8000/docs (API
 - Memory: `qwen2.5:7b` alone needs about 5 GB, and the `api` container (PyTorch, YOLO, embeddings) about 2 GB more. Docker Desktop on Windows gives WSL 50 % of the RAM by default; if a container is killed, raise `memory=` in `%UserProfile%\.wslconfig`.
 - Do not run the host Ollama app on port 11434 at the same time: stop it, or the published port may clash.
 
+### Tracing (Langfuse)
+
+Each claim sent to `/claims` or `/claims/analyze` becomes one Langfuse trace, named with the `claim_id`. It contains one observation per step:
+- `vision`, `nlp`, `policy`, and inside `policy`: `policy retrieval` and `policy LLM call` (a generation with model, prompt, answer, token usage and latency);
+- `decision`, with its status string and Wiem's LangGraph run (`LangGraph` → `vision`, `nlp`, `policy`, `decide`).
+
+The trace output is the decision, confidence and status, and `Decision.trace_id` returns the trace id to the caller.
+
+- Install: `pip install -r requirements-tracing.txt` (already in the full Docker image).
+- Keys: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` in `.env` (see `.env.example`); docker compose passes them to `api`.
+- Optional and safe: no library or no keys = no tracing, and the pipeline runs exactly as before. Langfuse errors are ignored. `CLAIMSPILOT_TRACING=0` turns it off. Tests never call Langfuse (`tests/conftest.py`).
+
 ## Team workflow
 
 - **Branches:** `git checkout main` → `git pull` → `git checkout -b <type>/<area>-<desc>` (e.g. `feat/vision-agent`). Never push to `main`, never work from a fork.
