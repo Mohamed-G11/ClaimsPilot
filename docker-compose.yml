@@ -40,6 +40,10 @@ services:
         required: false
     environment:
       OLLAMA_HOST: http://ollama:11434          # the ollama service, not the host
+      # Langfuse tracing (cloud): off when the keys are empty (see api/tracing.py)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-${LANGFUSE_HOST:-}}
     volumes:
       - ./models/vision:/app/models/vision:ro   # vision weights (dvc pull)
       - ./data/policy:/app/data/policy          # clauses + Chroma index
