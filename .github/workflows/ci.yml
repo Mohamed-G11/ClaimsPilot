@@ -15,6 +15,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements*.txt
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -23,15 +24,7 @@ jobs:
         run: ruff check .
 
       - name: Test
-        run: python -m pytest 
-    
-  
-
-
-
-
-
-
+        run: python -m pytest
 
   docker-build:
     runs-on: ubuntu-latest
@@ -39,8 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build image
-        run: docker build -t claimspilot-api .
+      - name: Check docker-compose.yml
+        run: docker compose config --quiet
+
+      # Only the light image is built here (seconds). The full image with the
+      # real agents (PyTorch...) is built locally with `docker compose build`.
+      - name: Build light image
+        run: docker build --target light -t claimspilot-api .
 
       - name: Smoke test
         run: |

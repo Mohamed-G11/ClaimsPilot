@@ -1,11 +1,38 @@
+# ClaimsPilot API with the REAL agents (Dockerfile target `full`).
+#
+# Before the first start, on the host (see README "Run with Docker"):
+#   dvc pull models/vision/yolov8s_merged_e30.pt.dvc data/policy/processed.dvc
+#   docker compose build
+#   docker compose run --rm api python -m agents.policy.index     # builds the policy index
+#   docker compose up -d
+#
+# Nothing heavy or secret is baked in the image: weights, policy data and the
+# downloaded embedding model live in volumes.
 services:
   api:
-    build: .
-    image: claimspilot-api
+    build:
+      context: .
+      target: full
+    image: claimspilot-api:full
     ports:
       - "8000:8000"
+    environment:
+      # Ollama runs on the host (not in Docker): reach it through the host gateway.
+      OLLAMA_HOST: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # needed on Linux; harmless on Docker Desktop
+    volumes:
+      - ./models:/app/models:ro                 # vision weights (dvc pull)
+      - ./data/policy:/app/data/policy          # clauses + Chroma index
+      - ./data/uploads:/app/data/uploads        # claim photos: send paths like data/uploads/x.jpg
+      - model-cache:/cache                      # embedding model downloaded once (~0.5 GB)
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  model-cache:

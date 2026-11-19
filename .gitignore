@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ClaimsPilot: generated locally, never committed
+data/policy/chroma/
+data/uploads/
