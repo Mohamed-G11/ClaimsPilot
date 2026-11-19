@@ -4,7 +4,8 @@ rules:
   reject_if_not_covered: true        # policy.covered is False -> reject
   review_if_coverage_unknown: true   # policy.covered is None  -> human_review
   review_if_inconsistent: true       # nlp.consistency == "inconsistent" -> human_review
-  review_if_uncertain: false         # nlp.consistency == "uncertain"    -> human_review
+  review_if_uncertain: true          # nlp.consistency == "uncertain"    -> human_review
+                                     # set to true by Mohamed (safety), agreed design
   min_nlp_score: 0.5                 # nlp.score below -> human_review
   review_severities: [severe]        # vision.severity in this list -> human_review
   review_if_no_damage: true          # vision found nothing (low recall) -> human_review

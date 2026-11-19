@@ -103,7 +103,7 @@ Read the files in this order. Each line says what the file does.
 **2. The API (how a claim travels through the system)**
 
 4. `api/main.py` — the FastAPI app: `/health`, `POST /claims` (returns the decision), `POST /claims/analyze` (returns every agent's result).
-5. `api/pipeline.py` — calls vision → NLP → policy for real, falls back to a stub when an agent cannot run, then `decide()` applies the decision rules (any stub → human review).
+5. `api/pipeline.py` — calls vision → NLP → policy for real, falls back to a stub when an agent cannot run, then `make_decision()`: any stub → human review (safety rule); otherwise Wiem's LangGraph decision agent; if LangGraph is missing or fails, her pure rules (Entry 7).
 
 **3. The policy agent (mine) — in the order a claim goes through it**
 
@@ -121,21 +121,22 @@ Read the files in this order. Each line says what the file does.
 
 15. `agents/vision/agent.py` + `agents/vision/config.yaml` — Wiem: YOLOv8 detects damages on photos, a points rule gives the severity.
 16. `agents/nlp/agent.py` — Hend: keyword extraction of the parts named in the text, compared with the parts seen by vision.
+17. `agents/decision/` — Wiem: `rules.py` (pure decision rules, thresholds in `config.yaml`), `agent.py` (LangGraph graph vision → nlp → policy → decide that applies those rules), `stubs.py`. Used by `api/pipeline.py` since Entry 7.
 
 **5. The user interface (Wiem)**
 
-17. `ui/app.py` — Streamlit page: form, call to `POST /claims`, display of the decision and its reasons.
+18. `ui/app.py` — Streamlit page: form, call to `POST /claims`, display of the decision and its reasons.
 
 **6. Platform (how it is tested, packaged and tracked)**
 
-18. `mlops/tracking.py` — the shared MLflow helper: the four required tags (`owner`, `git_commit`, `data_version`, `sprint`) and `start_run()`.
-19. `mlops/check_mlflow_connection.py` — logs one tiny run to check your `.env` credentials.
-20. `tests/` — `test_health.py`, `test_schemas.py`, `test_claims.py` (routes, fallback, decision rules), `test_pipeline_e2e.py` (HTTP → real agent code with fake model / index / LLM), `tests/policy/` (settings, chunking, index, rules, agent, evaluate), `tests/mlops/`, and the teammates' `tests/vision/`, `tests/nlp/`.
-21. `requirements*.txt` — `requirements.txt` (API only), `-dev` (tests, lint, DVC, MLflow: CI), `-policy`, `-vision`, `-ui` (heavy, installed only when needed), `-docker` (runtime of the real agents, for the full image).
-22. `Dockerfile`, `docker-compose.yml`, `.dockerignore` — two images from one file: `light` (CI) and `full` (real agents, data mounted as volumes).
-23. `.github/workflows/ci.yml` — CI: ruff + pytest, then compose check + light image build + `/health` smoke test.
-24. `.dvc/config`, `*.dvc` files — DVC: data and model weights live on DagsHub, Git only keeps small pointer files.
-25. `docs/progress/*.md` — each member's short progress notes; `docs/build-log/mohamed.md` — this file.
+19. `mlops/tracking.py` — the shared MLflow helper: the four required tags (`owner`, `git_commit`, `data_version`, `sprint`) and `start_run()`.
+20. `mlops/check_mlflow_connection.py` — logs one tiny run to check your `.env` credentials.
+21. `tests/` — `test_health.py`, `test_schemas.py`, `test_claims.py` (routes, agent fallback, stub safety rule, decision agent and its rules fallback), `test_pipeline_e2e.py` (HTTP → real agent code with fake model / index / LLM), `tests/policy/` (settings, chunking, index, rules, agent, evaluate), `tests/mlops/`, and the teammates' `tests/vision/`, `tests/nlp/`.
+22. `requirements*.txt` — `requirements.txt` (API + pyyaml for the decision rules), `-dev` (tests, lint, DVC, MLflow: CI), `-policy`, `-vision`, `-decision` (LangGraph), `-ui` (heavy, installed only when needed), `-docker` (runtime of the real agents, for the full image).
+23. `Dockerfile`, `docker-compose.yml`, `.dockerignore` — two images from one file: `light` (CI) and `full` (real agents, data mounted as volumes).
+24. `.github/workflows/ci.yml` — CI: ruff + pytest, then compose check + light image build + `/health` smoke test.
+25. `.dvc/config`, `*.dvc` files — DVC: data and model weights live on DagsHub, Git only keeps small pointer files.
+26. `docs/progress/*.md` — each member's short progress notes; `docs/build-log/mohamed.md` — this file.
 
 ---
 
@@ -646,6 +647,95 @@ docker compose up -d
 ```
 
 Risks I see in the untested part: (1) `torch` / `torchvision` are not pinned in the Dockerfile (I could not check which pair exists on the CPU index for Python 3.11); (2) Ultralytics may also install the non-headless `opencv-python` — the two system libraries `libgl1` and `libglib2.0-0` are there for that; (3) a Chroma index built on Windows and mounted in the Linux container should work with the same `chromadb` version, but rebuilding it in the container (command above) removes the doubt; (4) the first claim downloads the embedding model (~0.5 GB) into the `model-cache` volume, so it is slow once.
+
+---
+
+## Entry 7 — The API uses Wiem's LangGraph decision agent
+
+**Date:** 2026-11-19 · **Branch:** `feat/api-decision-agent` (from `main`) · **Commits:** `7c3a811`, then `2945816` (your answers, below)
+**Goal:** the API stops using its own `decide()` and uses Wiem's decision agent (`agents/decision/`), with our stub safety rule kept in front of it. Design approved by Mohamed.
+
+**Why:** there were two decision logics (my `decide()` in `api/pipeline.py` and Wiem's `agents/decision/rules.py`), which could disagree. Now there is one: Wiem's rules, run either through her LangGraph graph or directly. The stub safety rule stays in the API, because only the API knows which agent fell back to a stub.
+
+### The decision flow (`api/pipeline.py`, `make_decision()`)
+
+```
+vision, nlp, policy  (each: real agent, or stub on any error)
+        |
+        +-- any stub used? --yes--> human_review, confidence 0.0, reason names the stubs
+        |                           agents["decision"] = "safety: stub used"  (decision agent NOT called)
+        no
+        v
+agents.decision.agent.run(claim, vision, nlp, policy)      agents["decision"] = "langgraph"
+        | raises (LangGraph not installed, graph error...)
+        v
+agents.decision.rules.decide(claim, vision, nlp, policy)   agents["decision"] = "rules (fallback: <ErrorType>)"
+        | raises too (config.yaml missing...)
+        v
+human_review, confidence 0.0, reason "no automatic decision: ... both failed"
+                                                           agents["decision"] = "safety: decision failed (<agent error>, <rules error>)"
+```
+
+The graph's `decide` node calls the same `rules.decide()`, so the fallback gives exactly the same Decision as LangGraph. Only `agents["decision"]` differs.
+
+### Files, in order
+
+1. `api/pipeline.py` — old `decide()` removed; new `make_decision()` (flow above) returns `(Decision, how)`; `analyze_claim()` stores `how` in `agents["decision"]`. The safety Decision also lists Wiem's `summary()` facts (vision / text / policy) after the stub reason.
+2. `agents/decision/config.yaml` (Wiem's) — only `review_if_uncertain: false → true`, with the comment `# set to true by Mohamed (safety), agreed design`. Uncertain text/photo check → human, never approve.
+3. `requirements.txt` — added `pyyaml==6.0.3`. Wiem's `rules.py` reads `config.yaml` with yaml, and `api/pipeline.py` imports it, so without this line the **light image would not even start**.
+4. `Dockerfile` — `full` installs `requirements-decision.txt` (LangGraph); `agents/decision` was already copied by `COPY agents ./agents`. `light` unchanged (no LangGraph → rules fallback).
+5. `tests/test_claims.py` — the old `decide()` tests rewritten for `make_decision()` (see below).
+6. `tests/test_pipeline_e2e.py` — `agents["decision"]` may be `"langgraph"` or `"rules (fallback)"` depending on what is installed.
+7. `tests/decision/test_rules.py` (Wiem's) — **one line**, with your OK: line 71 expected the old default (uncertain → approve), now `human_review`.
+
+### Behaviour changes to know (Wiem's rules are stricter than the old `decide()`)
+
+- New human-review cases: NLP score < 0.5, no damage detected, mean vision confidence < 0.30.
+- Approve confidence = min(NLP score, mean vision confidence, 0.9) (before: min(NLP score, 0.9)). Example: the API stub claim is now approved with 0.82 instead of 0.9.
+- Severe damage → human_review with confidence 0.5 (before 0.6).
+- Reasons start with Wiem's facts (`vision: …`, `text vs photos: …`, `policy: …`) and end with `APPROVE: …`, `REJECT: …` or `HUMAN REVIEW: …` lines.
+
+### Concepts
+
+- **Safety gate before the decision logic**: some checks must not depend on the rules. A stub returns invented data, so "covered" or "consistent" from a stub means nothing: the claim goes to a human before any rule is applied.
+- **Graceful degradation**: LangGraph is a heavy optional library. If it is missing, the API still answers with the same rules, and says so (`"rules (fallback)"`), instead of crashing.
+- **Fake at the boundary**: in tests, `agents.decision.agent.run` is replaced by a fake that records its calls and applies the rules. So CI checks the wiring (called / not called, status names) without installing LangGraph.
+
+### How to test it
+
+```
+python -m pytest tests/test_claims.py tests/test_pipeline_e2e.py tests/decision -q
+pip install -r requirements-decision.txt     # then agents["decision"] == "langgraph" and the LangGraph tests run
+uvicorn api.main:app --reload                # POST /claims/analyze, read agents["decision"]
+```
+
+Tests added in `tests/test_claims.py`: stub used → human_review, confidence 0.0, decision agent not called; stub wins over reject; uncertain → human_review; not covered → reject; inconsistent / severe / unknown coverage → human_review; covered + consistent → approve through the decision agent (`"langgraph"`); LangGraph missing → `"rules (fallback)"` with the same Decision (4 cases); `/claims/analyze` reports each of the three statuses; a real-LangGraph test (skipped when LangGraph is not installed).
+
+### Result
+
+- `pytest`: **167 passed, 3 skipped** (161 passed, 2 skipped on `main` before). The new skip is the real-LangGraph test (LangGraph is not in my venv, nor in CI).
+- `ruff check .`: all checks passed.
+- Light image simulated (new venv with only `requirements.txt`): API imports; a claim gives `vision: stub (ImportError…)`, `decision: safety: stub used`, `human_review 0.0`. The policy agent now fails on `chromadb` instead of `yaml`, so it is still a stub there for real contracts.
+- **Not verified:** Docker build (Docker Desktop not running).
+
+### Your answers (Nov 19) and what changed (`2945816`)
+
+1. **Rules fallback fails too → human_review, confidence 0.0, never a 500.** `make_decision()` catches the rules' error and returns `human_review` with the reason `no automatic decision: the decision agent (<type>) and its rules (<type>: <message>) both failed`. Status: `safety: decision failed (<agent error type>, <rules error type>)` — this exact wording was my choice, change it if you prefer another. Tests: `test_rules_failing_too_goes_to_human_never_500`, `test_rules_failing_too_still_answers_over_http` (HTTP 200).
+2. **Fallback reason in the status:** `rules (fallback: <ExceptionType>)`, e.g. `rules (fallback: ModuleNotFoundError)` when LangGraph is not installed. The full message stays in the log.
+3. **`requirements-decision.txt` not changed** — you will ask Wiem to pin `langgraph`.
+
+### Merge of `main` (Hend's PR #22) and LangGraph run
+
+- `git merge main` (main = `3b15211`, Hend's held-out evaluation): **no conflict**. Brought `agents/nlp/agent.py`, `agents/nlp/evaluate.py`, `data/nlp/validate_heldout.py`, `tests/nlp/test_improvements.py`, the NLP notebook, `.gitignore`, `docs/progress/hend.md`.
+- `pip install -r requirements-decision.txt` in `.venv` → **langgraph 1.2.23** (+ langchain-core 1.8.3, langsmith 0.15.0…). Outside Git, on this machine only.
+- Real LangGraph tests: `test_real_langgraph_agent_matches_the_fallback` + Wiem's 3 graph tests → **4 passed**.
+- Full `pytest`: **184 passed, 1 skipped** (the skip is Wiem's vision test: weights / test images not pulled). Without LangGraph: 180 passed, 3 skipped.
+- `make_decision()` on the stub claim with LangGraph installed → `approve 0.82`, status `"langgraph"`.
+- `ruff check .`: all checks passed.
+
+### Still open
+
+- **Wiem's stricter rules** (list above): e.g. no damage detected → always human review. Agree with her that these are the wanted defaults.
 
 ---
 

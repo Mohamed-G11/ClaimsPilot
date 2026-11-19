@@ -7,9 +7,11 @@ fail like a missing library would.
 import pytest
 from fastapi.testclient import TestClient
 
+from agents.decision import agent as decision_agent
+from agents.decision import rules as decision_rules
 from api import pipeline
 from api.main import app
-from api.pipeline import decide, nlp_stub, policy_stub, vision_stub
+from api.pipeline import make_decision, nlp_stub, policy_stub, vision_stub
 from claimspilot.schemas import ClaimInput
 
 client = TestClient(app)
@@ -108,7 +110,7 @@ def test_call_falls_back_to_the_stub_and_says_why():
     assert status["x"] == "stub (FileNotFoundError: weights missing)"
 
 
-# --- decision rules --------------------------------------------------------
+# --- decision: stub safety rule, then the decision agent, then its rules -------
 
 def _results():
     claim = ClaimInput(**CLAIM)
@@ -116,54 +118,139 @@ def _results():
     return claim, vision, nlp_stub(claim, vision), policy_stub(claim, vision)
 
 
-def test_not_covered_is_rejected():
+def _langgraph_missing(*_args):
+    raise ModuleNotFoundError("No module named 'langgraph'")
+
+
+@pytest.fixture
+def decision_agent_calls(monkeypatch):
+    """Fake LangGraph agent: records its calls and applies Wiem's rules (no LangGraph needed)."""
+    calls = []
+
+    def fake_run(claim, vision, nlp, policy):
+        calls.append(claim.claim_id)
+        return decision_rules.decide(claim, vision, nlp, policy)
+
+    monkeypatch.setattr(decision_agent, "run", fake_run)
+    return calls
+
+
+def test_covered_and_consistent_is_approved_by_the_decision_agent(decision_agent_calls):
+    decision, how = make_decision(*_results(), stubs=[])
+    assert decision_agent_calls == ["C-001"]
+    assert how == "langgraph"
+    assert decision.decision == "approve"
+    assert decision.confidence == pytest.approx(0.82)  # min(nlp 0.9, vision 0.82, max 0.9)
+
+
+def test_any_stub_goes_to_human_without_calling_the_decision_agent(decision_agent_calls):
     claim, vision, nlp, policy = _results()
-    policy.covered = False
-    assert decide(claim, vision, nlp, policy).decision == "reject"
+    decision, how = make_decision(claim, vision, nlp, policy, stubs=["vision", "policy"])
+    assert decision_agent_calls == []
+    assert how == "safety: stub used"
+    assert decision.decision == "human_review"
+    assert decision.confidence == 0.0
+    assert "vision" in decision.reasons[0] and "policy" in decision.reasons[0]
+    assert "nlp" not in decision.reasons[0]
 
 
-def test_inconsistent_text_goes_to_human():
-    claim, vision, nlp, policy = _results()
-    nlp.consistency = "inconsistent"
-    assert decide(claim, vision, nlp, policy).decision == "human_review"
-
-
-def test_severe_damage_goes_to_human():
-    claim, vision, nlp, policy = _results()
-    vision.severity = "severe"
-    assert decide(claim, vision, nlp, policy).decision == "human_review"
-
-
-def test_all_good_and_all_real_is_approved():
-    claim, vision, nlp, policy = _results()
-    result = decide(claim, vision, nlp, policy, stubs=[])
-    assert result.decision == "approve"
-    assert result.confidence == 0.9
-
-
-def test_uncertain_text_goes_to_human_never_approve():
-    claim, vision, nlp, policy = _results()
-    nlp.consistency, nlp.score = "uncertain", 0.0
-    result = decide(claim, vision, nlp, policy)
-    assert result.decision == "human_review"
-    assert any("uncertain" in reason for reason in result.reasons)
-
-
-def test_unknown_coverage_goes_to_human():
-    claim, vision, nlp, policy = _results()
-    policy.covered = None
-    assert decide(claim, vision, nlp, policy).decision == "human_review"
-
-
-def test_any_stub_goes_to_human_and_reasons_name_the_stubs():
-    claim, vision, nlp, policy = _results()
-    result = decide(claim, vision, nlp, policy, stubs=["vision", "policy"])
-    assert result.decision == "human_review"
-    assert "vision" in result.reasons[0] and "policy" in result.reasons[0]
-    assert "nlp" not in result.reasons[0]
-
-
-def test_stub_wins_over_reject():
+def test_stub_wins_over_reject(decision_agent_calls):
     claim, vision, nlp, policy = _results()
     policy.covered = False                      # invented by a stub: not a reason to reject
-    assert decide(claim, vision, nlp, policy, stubs=["policy"]).decision == "human_review"
+    decision, _ = make_decision(claim, vision, nlp, policy, stubs=["policy"])
+    assert decision.decision == "human_review"
+
+
+def test_uncertain_text_goes_to_human_never_approve(decision_agent_calls):
+    claim, vision, nlp, policy = _results()
+    nlp.consistency = "uncertain"               # high score: only the uncertain rule fires
+    decision, _ = make_decision(claim, vision, nlp, policy, stubs=[])
+    assert decision.decision == "human_review"
+    assert any("could not be compared" in reason for reason in decision.reasons)
+
+
+def test_not_covered_is_rejected(decision_agent_calls):
+    claim, vision, nlp, policy = _results()
+    policy.covered = False
+    assert make_decision(claim, vision, nlp, policy, stubs=[])[0].decision == "reject"
+
+
+def test_inconsistent_text_goes_to_human(decision_agent_calls):
+    claim, vision, nlp, policy = _results()
+    nlp.consistency = "inconsistent"
+    assert make_decision(claim, vision, nlp, policy, stubs=[])[0].decision == "human_review"
+
+
+def test_severe_damage_goes_to_human(decision_agent_calls):
+    claim, vision, nlp, policy = _results()
+    vision.severity = "severe"
+    assert make_decision(claim, vision, nlp, policy, stubs=[])[0].decision == "human_review"
+
+
+def test_unknown_coverage_goes_to_human(decision_agent_calls):
+    claim, vision, nlp, policy = _results()
+    policy.covered = None
+    assert make_decision(claim, vision, nlp, policy, stubs=[])[0].decision == "human_review"
+
+
+@pytest.mark.parametrize("change", ["none", "not_covered", "uncertain", "severe"])
+def test_langgraph_missing_falls_back_to_the_same_rules(monkeypatch, change):
+    claim, vision, nlp, policy = _results()
+    if change == "not_covered":
+        policy.covered = False
+    elif change == "uncertain":
+        nlp.consistency = "uncertain"
+    elif change == "severe":
+        vision.severity = "severe"
+    with_agent = decision_rules.decide(claim, vision, nlp, policy)  # what the graph applies
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    decision, how = make_decision(claim, vision, nlp, policy, stubs=[])
+    assert how == "rules (fallback: ModuleNotFoundError)"
+    assert decision == with_agent
+
+
+def test_real_langgraph_agent_matches_the_fallback(monkeypatch):
+    pytest.importorskip("langgraph")
+    claim, vision, nlp, policy = _results()
+    decision, how = make_decision(claim, vision, nlp, policy, stubs=[])
+    assert how == "langgraph"
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    assert make_decision(claim, vision, nlp, policy, stubs=[]) == (decision, "rules (fallback: ModuleNotFoundError)")
+
+
+def test_analyze_reports_how_the_decision_was_made(fake_real_agents, decision_agent_calls,
+                                                  monkeypatch):
+    assert client.post("/claims/analyze", json=CLAIM).json()["agents"]["decision"] == "langgraph"
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    body = client.post("/claims/analyze", json=CLAIM).json()
+    assert body["agents"]["decision"] == "rules (fallback: ModuleNotFoundError)"
+    assert body["decision"]["decision"] == "approve"
+
+
+def test_analyze_reports_the_stub_safety_rule(no_real_agents, decision_agent_calls):
+    body = client.post("/claims/analyze", json=CLAIM).json()
+    assert body["agents"]["decision"] == "safety: stub used"
+    assert decision_agent_calls == []
+
+
+def _config_missing(*_args):
+    raise FileNotFoundError("agents/decision/config.yaml")
+
+
+def test_rules_failing_too_goes_to_human_never_500(monkeypatch):
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    monkeypatch.setattr(decision_rules, "decide", _config_missing)
+    decision, how = make_decision(*_results(), stubs=[])
+    assert decision.decision == "human_review"
+    assert decision.confidence == 0.0
+    assert "both failed" in decision.reasons[0]
+    assert how == "safety: decision failed (ModuleNotFoundError, FileNotFoundError)"
+
+
+def test_rules_failing_too_still_answers_over_http(fake_real_agents, monkeypatch):
+    monkeypatch.setattr(decision_agent, "run", _langgraph_missing)
+    monkeypatch.setattr(decision_rules, "decide", _config_missing)
+    response = client.post("/claims/analyze", json=CLAIM)
+    assert response.status_code == 200
+    assert response.json()["decision"]["decision"] == "human_review"
+    assert response.json()["agents"]["decision"].startswith("safety: decision failed")
