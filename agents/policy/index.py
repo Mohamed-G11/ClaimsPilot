@@ -1,0 +1,72 @@
+"""Embed the policy clauses and store them in a Chroma vector database.
+
+Usage:  python -m agents.policy.index
+Input:  data/policy/processed/clauses.jsonl  (made by agents.policy.chunking)
+Output: data/policy/chroma/                   (local vector database, rebuilt anytime)
+"""
+import json
+from functools import lru_cache
+
+from agents.policy.settings import CONFIG, data_path
+
+
+@lru_cache(maxsize=1)
+def embedder():
+    """The embedding model, loaded once (downloaded the first time, ~0.5 GB)."""
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(CONFIG["embedding_model"])
+
+
+def embed(texts: list[str]) -> list[list[float]]:
+    return embedder().encode(texts, normalize_embeddings=True).tolist()
+
+
+@lru_cache(maxsize=1)
+def collection():
+    """The Chroma collection holding all clauses of all insurers."""
+    import chromadb
+
+    client = chromadb.PersistentClient(path=str(data_path("chroma_dir")))
+    return client.get_or_create_collection(CONFIG["collection"],
+                                           metadata={"hnsw:space": "cosine"})
+
+
+class EmptyIndexError(RuntimeError):
+    """The Chroma index has no clause: it was never built on this machine."""
+
+
+def ready_collection():
+    """The collection, or a clear error when it is empty (instead of silent empty answers)."""
+    col = collection()
+    if col.count() == 0:
+        raise EmptyIndexError(
+            f"The policy index in {data_path('chroma_dir')} is empty. Build it with: "
+            "dvc pull data/policy/processed.dvc ; python -m agents.policy.index")
+    return col
+
+
+def load_clauses() -> list[dict]:
+    path = data_path("clauses_file")
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def build() -> None:
+    clauses = load_clauses()
+    col = collection()
+    if col.count():                       # rebuild from scratch
+        col.delete(ids=col.get()["ids"])
+    # The title is embedded with the text: it carries the meaning of the clause.
+    documents = [f"{c['title']}. {c['text']}" for c in clauses]
+    col.add(
+        ids=[c["clause_id"] for c in clauses],
+        documents=documents,
+        embeddings=embed(documents),
+        metadatas=[{k: c[k] for k in ("insurer", "title", "guarantee", "is_exclusion", "page")}
+                   for c in clauses],
+    )
+    print(f"Indexed {col.count()} clauses in {data_path('chroma_dir')}")
+
+
+if __name__ == "__main__":
+    build()

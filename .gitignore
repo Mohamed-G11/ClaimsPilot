@@ -222,3 +222,7 @@ __marimo__/
 # Local MLflow experiment tracking
 mlflow.db
 mlruns/
+
+# ClaimsPilot: generated locally, never committed
+data/policy/chroma/
+data/uploads/

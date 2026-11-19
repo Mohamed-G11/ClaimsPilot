@@ -1,0 +1,4 @@
+# Decision agent (Wiem) - orchestration, NOT installed in CI (AGENTS.md section 6)
+# Install: pip install -r requirements-decision.txt
+langgraph
+pyyaml

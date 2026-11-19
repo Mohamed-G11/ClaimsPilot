@@ -1,0 +1,127 @@
+# Policy agent configuration (read once by agents/policy/settings.py)
+raw_dir: data/policy/raw
+clauses_file: data/policy/processed/clauses.jsonl
+chroma_dir: data/policy/chroma
+collection: policy_clauses
+embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+max_chunk_chars: 1500
+
+# Retrieval: evidence = clauses of the guarantee + exclusions of that guarantee.
+# k_guarantee + k_exclusions = 4 clauses returned at most ("top-4").
+retrieval:
+  k_guarantee: 2
+  k_exclusions: 2
+  clause_chars: 600          # clause text is cut to this length in the result
+  # Words put before the claim text when searching exclusion clauses, so the
+  # search looks for the exclusion found by the rules ({exclusions} = its label).
+  exclusion_hint: "Exclusions, ce que nous ne garantissons pas : {exclusions}."
+
+# One entry per insurer: which PDF, where the real text starts (after the
+# table of contents), and how its section titles are written.
+insurers:
+  AXA:
+    file: AXA.pdf
+    start_page: 5
+    style: articles        # "Article 15 : Dommages collision"
+  SANLAM:
+    file: SANLAM.pdf
+    start_page: 8
+    end_page: 35           # annexes after this page are tariff tables
+    style: risks           # "5. Risque R7 : Dommages collision" + "5.1. Objet de la garantie"
+
+# "Conditions particulieres": which guarantees each formula includes.
+formulas:
+  TIERS: [rc, defense_recours]
+  TR: [rc, defense_recours, tous_risques, collision, bris_de_glace, incendie, vol, vandalisme]
+
+# --- Step 1: the CAUSE of the claim, read from the text (rule-based) ---------
+# Keywords are matched as whole words, without accents or capitals, FR + EN.
+# When several causes are found, the FIRST one in this list wins.
+# `guarantees` = the guarantees that can pay for this cause.
+causes:
+  collision:
+    keywords: [collision, choc, accident, accrochage, percuté, percutée, heurté, heurtée,
+               embouti, emboutie, crash, crashed, collided, hit by, bumped into]
+    guarantees: [collision, tous_risques]
+  vol:
+    keywords: [vol, volé, volée, volés, volées, voleur, voleurs, theft, stolen, stole]
+    guarantees: [vol]
+  incendie:
+    keywords: [incendie, incendié, incendiée, feu, flammes, brûlé, brûlée, fire, burned, burnt]
+    guarantees: [incendie]
+  bris_de_glace:
+    keywords: [bris de glace, bris de glaces, pare-brise, windshield, windscreen]
+    guarantees: [bris_de_glace]
+  vandalisme:
+    keywords: [vandalisme, vandalisé, vandalisée, vandales, malveillance,
+               vandalism, vandalized, vandalised]
+    guarantees: [vandalisme]
+  catastrophe_naturelle:
+    keywords: [inondation, inondations, inondé, inondée, catastrophe naturelle, crue,
+               flood, flooded, flooding]
+    guarantees: [catastrophe_naturelle]
+
+# Expressions removed from the text before looking for causes, because they
+# contain a cause keyword but mean something else ("feu arrière" is a light,
+# not a fire; "pare-choc" is a bumper, not a shock).
+ignore_phrases: [feu arrière, feux arrière, feu avant, feux avant, feu rouge, feu vert,
+                 feu orange, feu tricolore, feu stop, feux stop, feu de signalisation,
+                 feux de signalisation, feu de position, feux de position,
+                 feu de croisement, feux de croisement, feux de détresse,
+                 pare-choc, pare choc]
+
+# --- Step 2: are the photos compatible with the cause? -----------------------
+# A cause is compatible when at least one damage seen by vision has its part in
+# `parts` or its type in `damage_types`. `required: false` = no damage needed
+# (a stolen or burnt car may show nothing useful on the photos).
+compatibility:
+  collision:
+    parts: [front_bumper, rear_bumper, door, hood, trunk, fender, headlight, taillight,
+            side_mirror, wheel, other]
+  bris_de_glace:
+    parts: [windshield, headlight]
+    damage_types: [glass_shatter]
+  vandalisme:
+    parts: [side_mirror]
+    damage_types: [scratch, dent]
+  vol: {required: false}
+  incendie: {required: false}
+  catastrophe_naturelle: {required: false}
+
+# No cause in the text: the guarantee is deduced from the damages.
+from_damages:
+  glass_parts: [windshield, headlight]
+  glass_damage_types: [glass_shatter]
+  glass_guarantees: [bris_de_glace, collision, tous_risques]
+  default_guarantees: [collision, tous_risques]
+
+# --- Step 3: exclusions mentioned in the text --------------------------------
+# Any match -> covered = None (a human decides), never an automatic reject.
+exclusions:
+  alcool:
+    label: conduite sous l'emprise de l'alcool
+    keywords: [alcool, alcoolisé, alcoolisée, alcoolémie, ivre, ivresse, ébriété,
+               drunk, alcohol, intoxicated, under the influence]
+  sans_permis:
+    label: conduite sans permis valide
+    keywords: [sans permis, pas de permis, pas le permis, permis suspendu, permis retiré,
+               permis annulé, retrait de permis, no licence, no license, without a licence,
+               without a license, unlicensed, suspended licence, suspended license]
+  course:
+    label: participation à une course ou compétition
+    keywords: [course automobile, course de vitesse, course poursuite, rallye, compétition,
+               racing, street race, rally]
+  intentionnel:
+    label: dommage intentionnel
+    keywords: [intentionnel, intentionnelle, intentionnellement, volontairement, exprès,
+               intentional, intentionally, on purpose, deliberately]
+
+# --- Step 4: generation (the LLM explains, the rules decide) -----------------
+llm:
+  enabled: true
+  provider: ollama
+  model: phi3.5                    # ollama pull phi3.5
+  host: http://localhost:11434     # overridden by the OLLAMA_HOST env var
+  timeout_seconds: 30              # slower than this -> template answer
+  temperature: 0
+  max_tokens: 220
