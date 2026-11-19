@@ -7,7 +7,6 @@ from pathlib import Path
 
 from claimspilot.schemas import PARTS
 
-
 DATA_DIR = Path(__file__).resolve().parent
 
 FILES = [

@@ -147,13 +147,12 @@ def is_negated(text: str, start: int, end: int) -> bool:
         return True
 
     # French: "portière sans dommage"
-    if re.search(
-        r"\b(?:sans dommage|pas endommage|aucun degat)\b",
-        after[:45],
-    ):
-        return True
-
-    return False
+    return bool(
+        re.search(
+            r"\b(?:sans dommage|pas endommage|aucun degat)\b",
+            after[:45],
+        )
+    )
 
 
 def extract_damaged_parts(text: str) -> list[str]:

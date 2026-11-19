@@ -19,7 +19,6 @@ from sklearn.metrics import (
 from agents.nlp.agent import run
 from claimspilot.schemas import ClaimInput, Damage, VisionResult
 
-
 LABELS = ["consistent", "inconsistent", "uncertain"]
 ROOT = Path(__file__).resolve().parents[2]
 
