@@ -783,6 +783,89 @@ cmp AGENTS.md CLAUDE.md        # no output = identical
 
 ---
 
+## Entry 9 — Policy LLM: qwen2.5:7b vs qwen3:4b
+
+**Date:** 2026-11-19 · **Branch:** `feat/policy-llm-choice` (origin/main merged in, no conflict) · **Commits:** `ff4e2e7`, `5356027`, `90d37ee`, `43c5d1a`, this entry
+**Goal:** compare `qwen2.5:7b` and `qwen3:4b` for the policy agent's explanations, and let Mohamed choose.
+**Decision (Mohamed):** **qwen2.5:7b**. `agents/policy/config.yaml`: `llm.model: qwen2.5:7b`, `max_tokens: 1024` (the evaluated settings), `timeout_seconds` kept at 150.
+
+### Reminder: what the LLM can and cannot change
+
+The rules decide `covered` and retrieval chooses the clauses, so `clause_hit_at_4` is the same for every model. Only the 18 claims (of 30) whose rules give True / False call the LLM. The LLM writes the explanation, and it can still change two things:
+- an answer without a readable "Décision : …" falls back to the template;
+- an answer that **contradicts** the rule makes `covered = None` (human review), which lowers `coverage_accuracy`.
+
+### Files, in order
+
+1. `agents/policy/generation.py`
+   - every Ollama request sends `think: false`;
+   - `strip_thinking()` removes `<think>…</think>` and everything up to the last `</think>`;
+   - **permanent guard**: when Ollama stops on `done_reason: "length"` and the model lists `thinking` in its capabilities (`/api/show`, cached), the text is never used and the template answer is used. The reason: cut reasoning has no tag, and it can even quote "Décision : COUVERT" from the prompt.
+2. `agents/policy/evaluate.py`
+   - `--model` and `--max-tokens` options change `CONFIG` in memory, for one run only (`config.yaml` not edited);
+   - a warm-up call loads the model before timing;
+   - each LLM call is recorded and the 10 agreed metrics are computed (see the docstring);
+   - MLflow gets the params `llm_max_tokens` and `llm_temperature`, and the tag `llm_model`.
+3. `tests/policy/test_generation.py` (new): tag removal, `think: false` in the request, no reasoning text in the answer, the guard (reasoning model cut → no answer; non-reasoning model cut → answer kept; `/api/show` only asked when cut), `--model` / `--max-tokens` override. `tests/policy/test_evaluate.py`: the new metrics.
+4. `agents/policy/config.yaml`: the chosen model and `max_tokens` (above).
+5. `mlops/tracking.py`: `safe_console()`, called by `start_run()`, + a test (see "MLflow crash").
+
+### Comparison (all 30 eval claims = 18 LLM calls, temperature 0, `max_tokens` 1024, timeout 150 s)
+
+| Metric | qwen2.5:7b — full run | qwen3:4b — pilot (E01, E03) + probe (E01) |
+|---|---|---|
+| MLflow run | `bdc2dc63bd2e482baeacd78def439d40` | not logged (pilot / probe only, no full run) |
+| LLM calls | 18 | 2 (pilot) + 1 (probe) |
+| Seconds per answer: mean / median / max | **20.1 / 20.6 / 31.7** | 92 s to hit the 1024-token cap; 172 s to finish E01 with no cap |
+| Tokens needed | finishes well under 1024 (`done_reason: stop`) | ≈ 1,800 for E01 (reasoning first; the thinking switch is ignored) |
+| Fallback to template | **0 / 18** | **2 / 2** at 1024 tokens: cut while reasoning (guard) |
+| Agrees with the rule | 61.1 % (11 / 18) | — |
+| Contradiction (→ `covered = None`) | **38.9 % (7 / 18)** | — |
+| Cites a retrieved clause | 77.8 % | E01 probe: yes ([AXA-013], [AXA-015]) |
+| Invented citation | 0 % | E01 probe: none |
+| Format OK (decision line, ≤ 4 sentences) | 100 % | E01 probe: yes |
+| Wrong language | 0 % | E01 probe: French (after the reasoning is removed) |
+| Answers citing a correct clause (all claims) | 64 % (template: 80 %) | — |
+| coverage_accuracy (all 30 claims) | **73.3 %** (template: 96.7 %) | — |
+| clause_hit_at_4 | 80 % (unchanged: retrieval only) | — |
+
+Why the decision is clear without a qwen3:4b full run: at the agreed 1024 tokens it never reaches an answer, and with enough tokens it needs about 3 minutes per claim on this CPU, which is too slow for the API (timeout 150 s).
+
+Examples for claim E01 (AXA-TR, "Collision avec une autre voiture…, pare-chocs avant enfoncé", rule: COUVERT):
+- qwen2.5:7b: "Décision : COUVERT [AXA-015, AXA-013] Le sinistre est couvert par la garantie dommage collision [AXA-015] et dommage tous accidents [AXA-013] du contrat AXA, formule TR. Les dommages au pare-chocs avant sont directement liés à la collision avec une autre voiture, ce qui est inclus dans ces garanties."
+- qwen3:4b (probe, no cap): "Décision : COUVERT. Le sinistre est couvert par [AXA-013] car la collision avec un autre véhicule est explicitement incluse dans la garantie tous accidents. [AXA-015] couvre également les dommages consécutifs à une collision avec un véhicule terrestre à moteur identifié."
+
+A wrong qwen2.5:7b answer, E03 (AXA-**TIERS**, rule: NON COUVERT): "Décision : COUVERT [AXA-015]. Le sinistre est couvert par la garantie dommage collision, car il s'agit d'une collision avec un autre véhicule, ce qui est inclus dans la formule TIERS de l'assurance AXA." The safety rule caught it: `covered = None`, human review.
+
+### MLflow crash on Windows (fixed)
+
+At the end of the run, MLflow prints "🏃 View run …". With the output redirected to a file, Windows uses cp1252, which cannot encode the emoji: `UnicodeEncodeError`, so the run was never closed. Params, tags, metrics and the JSON artifact were already uploaded, so I only marked run `bdc2dc63…` as `FINISHED` (`MlflowClient.set_terminated`). **Fix:** `mlops/tracking.safe_console()` sets `errors="backslashreplace"` on stdout / stderr in `start_run()`, so unencodable characters are escaped instead of crashing. Every script using `start_run()` gets it.
+
+### Concepts
+
+- **Reasoning ("thinking") model**: it writes a hidden chain of reasoning before the answer. On a CPU this costs many tokens and much time, and the switch to turn it off does not work on every build (qwen3:4b here).
+- **`done_reason: "length"`**: Ollama stopped because of `num_predict` (max tokens), not because the model had finished.
+- **Same settings for both models**: a comparison is fair only if both runs use the same claims, temperature and token limit.
+
+### How to check
+
+```
+python -m pytest tests/policy/test_generation.py tests/policy/test_evaluate.py tests/mlops -q
+python -m agents.policy.evaluate --model qwen2.5:7b --max-tokens 1024     # ~6 min, logs to MLflow
+```
+
+### Open issue — qwen2.5:7b contradicts the rule (prompt fix to try in sprint 4)
+
+qwen2.5:7b contradicts the rule on **7 / 18** claims, which drops coverage_accuracy to **73.3 % with the LLM vs 96.7 % with the template**:
+- **5 are TIERS contracts** (E03, E04, E10, E17, E24): the rule says NON COUVERT (third-party formula), the LLM says COUVERT. It does not use the "garanties incluses dans la formule" line, and the clauses it receives describe the guarantee itself.
+- **2 are TR** (E13 fire, E25 no cause): the rule says COUVERT, the LLM says NON COUVERT.
+
+No wrong decision reaches the customer: every contradiction becomes `covered = None` → human review. But it is 7 extra manual reviews out of 18.
+
+To try in sprint 4, measured with the same command: give the verdict in the prompt ("La règle a conclu : NON COUVERT, explique pourquoi") so the LLM only explains; or say explicitly that TIERS excludes damage to the insured car.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**

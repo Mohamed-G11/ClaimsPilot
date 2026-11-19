@@ -120,8 +120,8 @@ exclusions:
 llm:
   enabled: true
   provider: ollama
-  model: phi3.5                    # ollama pull phi3.5
+  model: qwen2.5:7b                # chosen on Nov 19 (build log entry 9); ollama pull qwen2.5:7b
   host: http://localhost:11434     # overridden by the OLLAMA_HOST env var
-  timeout_seconds: 30              # slower than this -> template answer
+  timeout_seconds: 150              # slower than this -> template answer
   temperature: 0
-  max_tokens: 220
+  max_tokens: 1024

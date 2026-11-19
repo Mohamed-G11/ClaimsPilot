@@ -13,6 +13,7 @@ on every training / evaluation run. Use this helper instead of rewriting them:
 """
 import os
 import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -73,6 +74,15 @@ def has_credentials() -> bool:
     return all(value not in PLACEHOLDERS for value in values)
 
 
+def safe_console() -> None:
+    """MLflow prints emoji ("🏃 View run ...") when a run ends. On Windows, output
+    redirected to a file uses cp1252, which cannot encode them: the print crashed
+    the end of the run. Unencodable characters are now escaped instead."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
+
+
 @contextmanager
 def start_run(experiment: str, run_name: str, owner: str, sprint: int | str,
               data: list[str | Path] | None = None):
@@ -81,6 +91,7 @@ def start_run(experiment: str, run_name: str, owner: str, sprint: int | str,
     from dotenv import load_dotenv
 
     load_dotenv(REPO_ROOT / ".env")
+    safe_console()
     mlflow.set_experiment(experiment)
     with mlflow.start_run(run_name=run_name) as run:
         mlflow.set_tags(required_tags(owner, sprint, data))

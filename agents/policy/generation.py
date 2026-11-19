@@ -3,7 +3,10 @@
 The coverage decision is taken by the rules in agent.py. This module only
 writes the sentence shown to the claims handler:
 
-- `ollama_generate(prompt)` asks Phi-3.5-mini (through a local Ollama server);
+- `ollama_generate(prompt)` asks the model of `llm.model` (through a local Ollama
+  server), with thinking mode off; any reasoning text the model still writes
+  (`... </think>`) is removed, only the answer is kept; a reasoning model cut by
+  `max_tokens` gives no answer (its text may be reasoning without any tag);
 - `template_answer(...)` builds the same kind of answer without any model. It
   is used when Ollama is not reachable or slower than `llm.timeout_seconds`.
 
@@ -15,6 +18,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from functools import cache
 
 from agents.policy.rules import normalize
 from agents.policy.settings import CONFIG
@@ -32,6 +36,7 @@ VERDICT_FR = {True: "COUVERT", False: "NON COUVERT"}
 
 CITATION = re.compile(r"\[([A-Z]+-\d+(?:-\d+)?)\]")
 VERDICT = re.compile(r"decision\s*(non couvert|couvert)")
+THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class GeneratorUnavailable(RuntimeError):
@@ -51,17 +56,54 @@ def ollama_generate(prompt: str) -> str:
         host = f"http://{host}"
     body = json.dumps({
         "model": cfg["model"], "prompt": prompt, "stream": False,
+        "think": False,              # reasoning models (qwen3): no thinking mode
         "options": {"temperature": cfg["temperature"], "num_predict": cfg["max_tokens"]},
     }).encode("utf-8")
     request = urllib.request.Request(f"{host}/api/generate", data=body,
                                      headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=cfg["timeout_seconds"]) as response:
-            text = json.loads(response.read().decode("utf-8")).get("response", "")
+            data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
         raise GeneratorUnavailable(f"Ollama ({host}, model {cfg['model']}): {error}") from error
-    if not text.strip():
-        raise GeneratorUnavailable("Ollama returned an empty answer")
+    # Guard: a reasoning model stopped by max_tokens may have written only (part of)
+    # its reasoning, without any tag to remove it. Never use such a text.
+    if data.get("done_reason") == "length" and is_reasoning_model(host, cfg["model"]):
+        raise GeneratorUnavailable(f"answer cut by max_tokens ({cfg['max_tokens']}) "
+                                   f"on the reasoning model {cfg['model']}")
+    text = strip_thinking(data.get("response", ""))
+    if not text:
+        raise GeneratorUnavailable("Ollama returned an empty answer (or only reasoning text)")
+    return text
+
+
+@cache
+def is_reasoning_model(host: str, model: str) -> bool:
+    """Does Ollama list "thinking" in the model's capabilities? False if it cannot tell."""
+    request = urllib.request.Request(f"{host}/api/show",
+                                     data=json.dumps({"model": model}).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            info = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+    return "thinking" in info.get("capabilities", [])
+
+
+def strip_thinking(text: str) -> str:
+    """Keep only the answer of a reasoning model.
+
+    Some models (qwen3:4b) still reason when thinking mode is off. The reasoning
+    comes either as "<think>...</think>" or, when the opening tag is in the
+    model's prompt template, as "...</think>" followed by the answer. Reasoning
+    cut by `max_tokens` ("<think>..." never closed) leaves no answer: "".
+    """
+    text = THINK_BLOCK.sub("", text)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    elif "<think>" in text:
+        text = ""
     return text.strip()
 
 
