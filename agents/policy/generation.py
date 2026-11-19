@@ -3,7 +3,9 @@
 The coverage decision is taken by the rules in agent.py. This module only
 writes the sentence shown to the claims handler:
 
-- `ollama_generate(prompt)` asks Phi-3.5-mini (through a local Ollama server);
+- `ollama_generate(prompt)` asks the model of `llm.model` (through a local Ollama
+  server), with thinking mode off; any reasoning text the model still writes
+  (`... </think>`) is removed, only the answer is kept;
 - `template_answer(...)` builds the same kind of answer without any model. It
   is used when Ollama is not reachable or slower than `llm.timeout_seconds`.
 
@@ -32,6 +34,7 @@ VERDICT_FR = {True: "COUVERT", False: "NON COUVERT"}
 
 CITATION = re.compile(r"\[([A-Z]+-\d+(?:-\d+)?)\]")
 VERDICT = re.compile(r"decision\s*(non couvert|couvert)")
+THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class GeneratorUnavailable(RuntimeError):
@@ -51,6 +54,7 @@ def ollama_generate(prompt: str) -> str:
         host = f"http://{host}"
     body = json.dumps({
         "model": cfg["model"], "prompt": prompt, "stream": False,
+        "think": False,              # reasoning models (qwen3): no thinking mode
         "options": {"temperature": cfg["temperature"], "num_predict": cfg["max_tokens"]},
     }).encode("utf-8")
     request = urllib.request.Request(f"{host}/api/generate", data=body,
@@ -60,8 +64,25 @@ def ollama_generate(prompt: str) -> str:
             text = json.loads(response.read().decode("utf-8")).get("response", "")
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
         raise GeneratorUnavailable(f"Ollama ({host}, model {cfg['model']}): {error}") from error
-    if not text.strip():
-        raise GeneratorUnavailable("Ollama returned an empty answer")
+    text = strip_thinking(text)
+    if not text:
+        raise GeneratorUnavailable("Ollama returned an empty answer (or only reasoning text)")
+    return text
+
+
+def strip_thinking(text: str) -> str:
+    """Keep only the answer of a reasoning model.
+
+    Some models (qwen3:4b) still reason when thinking mode is off. The reasoning
+    comes either as "<think>...</think>" or, when the opening tag is in the
+    model's prompt template, as "...</think>" followed by the answer. Reasoning
+    cut by `max_tokens` ("<think>..." never closed) leaves no answer: "".
+    """
+    text = THINK_BLOCK.sub("", text)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    elif "<think>" in text:
+        text = ""
     return text.strip()
 
 

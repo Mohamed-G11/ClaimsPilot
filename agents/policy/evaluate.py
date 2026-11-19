@@ -1,6 +1,8 @@
 """Evaluate the policy agent on the labelled claims of data/policy/eval_claims.csv.
 
 Usage:  python -m agents.policy.evaluate            (real index + Ollama if it answers)
+        python -m agents.policy.evaluate --model qwen2.5:7b   (this Ollama model for
+                                                    this run; config.yaml unchanged)
         python -m agents.policy.evaluate --no-llm   (template answers only)
 
 Each CSV row is one claim: the text, the contract, the damages vision would have
@@ -129,15 +131,22 @@ def log_to_mlflow(report: dict, run_name: str) -> str | None:
             "generator": report["generator"],
         })
         mlflow.log_metrics({k: v for k, v in report["metrics"].items() if v is not None})
+        mlflow.set_tag("llm_model", CONFIG["llm"]["model"])
         mlflow.log_dict(report, "policy_eval.json")
         return run.info.run_id
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--model", help="Ollama model for this run (default: llm.model "
+                                        "in agents/policy/config.yaml, file not changed)")
     parser.add_argument("--no-llm", action="store_true", help="template answers only")
     parser.add_argument("--no-mlflow", action="store_true", help="do not log to MLflow")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.model:
+        # in memory, for this process only: the Ollama request, model_version and
+        # the MLflow params / tags all read CONFIG["llm"]["model"]
+        CONFIG["llm"]["model"] = args.model
 
     cases = load_cases()
     report = evaluate(cases, generator=generation.no_generator if args.no_llm else None)
