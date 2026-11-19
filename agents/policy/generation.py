@@ -5,7 +5,8 @@ writes the sentence shown to the claims handler:
 
 - `ollama_generate(prompt)` asks the model of `llm.model` (through a local Ollama
   server), with thinking mode off; any reasoning text the model still writes
-  (`... </think>`) is removed, only the answer is kept;
+  (`... </think>`) is removed, only the answer is kept; a reasoning model cut by
+  `max_tokens` gives no answer (its text may be reasoning without any tag);
 - `template_answer(...)` builds the same kind of answer without any model. It
   is used when Ollama is not reachable or slower than `llm.timeout_seconds`.
 
@@ -17,6 +18,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from functools import cache
 
 from agents.policy.rules import normalize
 from agents.policy.settings import CONFIG
@@ -61,13 +63,32 @@ def ollama_generate(prompt: str) -> str:
                                      headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=cfg["timeout_seconds"]) as response:
-            text = json.loads(response.read().decode("utf-8")).get("response", "")
+            data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
         raise GeneratorUnavailable(f"Ollama ({host}, model {cfg['model']}): {error}") from error
-    text = strip_thinking(text)
+    # Guard: a reasoning model stopped by max_tokens may have written only (part of)
+    # its reasoning, without any tag to remove it. Never use such a text.
+    if data.get("done_reason") == "length" and is_reasoning_model(host, cfg["model"]):
+        raise GeneratorUnavailable(f"answer cut by max_tokens ({cfg['max_tokens']}) "
+                                   f"on the reasoning model {cfg['model']}")
+    text = strip_thinking(data.get("response", ""))
     if not text:
         raise GeneratorUnavailable("Ollama returned an empty answer (or only reasoning text)")
     return text
+
+
+@cache
+def is_reasoning_model(host: str, model: str) -> bool:
+    """Does Ollama list "thinking" in the model's capabilities? False if it cannot tell."""
+    request = urllib.request.Request(f"{host}/api/show",
+                                     data=json.dumps({"model": model}).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            info = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+    return "thinking" in info.get("capabilities", [])
 
 
 def strip_thinking(text: str) -> str:

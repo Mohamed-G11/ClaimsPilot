@@ -25,15 +25,24 @@ def test_strip_thinking_keeps_only_the_answer(raw, expected):
 
 @pytest.fixture
 def fake_ollama(monkeypatch):
-    """Replace urlopen: records the JSON body sent, answers with fake["response"]."""
-    fake = {"response": ANSWER, "sent": None}
+    """Replace urlopen. /api/generate: records the JSON body sent, answers with
+    fake["response"] and fake["done_reason"]; /api/show: fake["capabilities"]."""
+    fake = {"response": ANSWER, "done_reason": "stop", "capabilities": ["completion"],
+            "sent": None, "show_calls": 0}
 
     def urlopen(request, timeout):
-        fake["sent"] = json.loads(request.data.decode("utf-8"))
-        return io.BytesIO(json.dumps({"response": fake["response"]}).encode("utf-8"))
+        if request.full_url.endswith("/api/show"):
+            fake["show_calls"] += 1
+            answer = {"capabilities": fake["capabilities"]}
+        else:
+            fake["sent"] = json.loads(request.data.decode("utf-8"))
+            answer = {"response": fake["response"], "done_reason": fake["done_reason"]}
+        return io.BytesIO(json.dumps(answer).encode("utf-8"))
 
     monkeypatch.setattr(generation.urllib.request, "urlopen", urlopen)
-    return fake
+    generation.is_reasoning_model.cache_clear()
+    yield fake
+    generation.is_reasoning_model.cache_clear()
 
 
 def test_ollama_request_turns_thinking_off(fake_ollama, monkeypatch):
@@ -56,18 +65,42 @@ def test_only_reasoning_means_no_answer(fake_ollama):
         generation.ollama_generate("Bonjour")
 
 
+def test_reasoning_model_cut_by_max_tokens_gives_no_answer(fake_ollama):
+    # untagged reasoning that even quotes the expected format: must never be used
+    fake_ollama["response"] = "Okay, the user wants me to start with Décision : COUVERT"
+    fake_ollama["done_reason"] = "length"
+    fake_ollama["capabilities"] = ["completion", "thinking"]
+    with pytest.raises(generation.GeneratorUnavailable, match="cut by max_tokens"):
+        generation.ollama_generate("Bonjour")
+
+
+def test_non_reasoning_model_cut_by_max_tokens_keeps_its_answer(fake_ollama):
+    fake_ollama["done_reason"] = "length"
+    assert generation.ollama_generate("Bonjour") == ANSWER
+    assert fake_ollama["show_calls"] == 1
+
+
+def test_capabilities_are_only_asked_when_the_answer_is_cut(fake_ollama):
+    fake_ollama["capabilities"] = ["completion", "thinking"]
+    assert generation.ollama_generate("Bonjour") == ANSWER          # done_reason "stop"
+    assert fake_ollama["show_calls"] == 0
+
+
 def test_model_option_overrides_the_config_for_the_run(monkeypatch, tmp_path):
     monkeypatch.setitem(CONFIG["llm"], "model", "model-from-config")   # restored after
+    monkeypatch.setitem(CONFIG["llm"], "max_tokens", 220)
     monkeypatch.setattr(evaluate, "RESULTS_FILE", tmp_path / "eval_results.json")
     monkeypatch.setattr(evaluate, "load_cases", list)              # no claim
+    monkeypatch.setattr(evaluate, "warm_up", lambda: None)         # no Ollama call
     seen = {}
 
     def fake_evaluate(cases, generator=None):
         seen["model"] = CONFIG["llm"]["model"]
+        seen["max_tokens"] = CONFIG["llm"]["max_tokens"]
         return {"metrics": {"llm_answers": 1}, "rows": []}
 
     monkeypatch.setattr(evaluate, "evaluate", fake_evaluate)
-    evaluate.main(["--model", "qwen2.5:7b", "--no-mlflow"])
-    assert seen["model"] == "qwen2.5:7b"
+    evaluate.main(["--model", "qwen2.5:7b", "--max-tokens", "1024", "--no-mlflow"])
+    assert seen == {"model": "qwen2.5:7b", "max_tokens": 1024}
     report = json.loads((tmp_path / "eval_results.json").read_text(encoding="utf-8"))
     assert report["generator"] == "qwen2.5:7b"
