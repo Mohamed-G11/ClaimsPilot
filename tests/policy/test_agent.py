@@ -236,3 +236,18 @@ def test_query_has_the_claim_text_and_the_damages_in_french():
 def test_query_keeps_unknown_words_as_they_are():
     query = agent.build_query(claim("AXA-TR"), vision(("roof", "hole")))
     assert "hole roof" in query
+
+
+def test_explain_rule_prompt_receives_the_rule_verdict(monkeypatch):
+    from agents.policy.settings import CONFIG
+
+    monkeypatch.setitem(CONFIG["llm"], "prompt_variant", "explain_rule")
+    prompts = []
+
+    def llm(prompt):
+        prompts.append(prompt)
+        return "Décision : NON COUVERT. La formule TIERS ne couvre pas [AXA-015]."
+
+    analysis = run("AXA-TIERS", "Collision sur un parking.", BUMPER, generator=llm)
+    assert "« Décision : NON COUVERT »" in prompts[0]
+    assert analysis.result.covered is False and analysis.generator == "llm"
