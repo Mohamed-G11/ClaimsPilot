@@ -1,9 +1,11 @@
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Response
+from fastapi.staticfiles import StaticFiles
 
-from api import warmup
+from api import upload, warmup
 from api.pipeline import ClaimAnalysis, analyze_claim, process_claim
 from claimspilot.schemas import ClaimInput, Decision
 
@@ -17,6 +19,14 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ClaimsPilot API", version=API_VERSION, lifespan=lifespan)
+app.include_router(upload.router)
+
+# Customer web app (plain HTML/CSS/JS) at /app, same origin as the API (no CORS).
+# Mounted only when the folder exists (the light CI image does not copy it).
+WEBAPP_DIR = Path(os.getenv("CLAIMSPILOT_WEBAPP_DIR", Path(__file__).resolve().parents[1]
+                            / "webapp"))
+if WEBAPP_DIR.is_dir():
+    app.mount("/app", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
 
 
 @app.get("/health")
