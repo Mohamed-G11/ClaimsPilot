@@ -1077,6 +1077,76 @@ If the first claim must also be fast for vision and retrieval, the same warm-up 
 
 ---
 
+## Entry 14 — Task 5: policy prompt experiment (no decision taken)
+
+**Date:** 2026-11-20 · **Branch:** `feat/policy-prompt-fix` (stacked on `fix/llm-warm-start`) · **Commits:** `fd856aa`, this entry
+**Goal:** try two prompt fixes for the open issue of entry 9 (qwen2.5:7b contradicts the rule on 7 / 18 claims, mostly TIERS). **The default stays `current`.**
+
+### Files, in order
+
+1. `agents/policy/generation.py`: `build_prompt(..., covered=None, variant=None)`, with variant = `llm.prompt_variant` by default.
+   - `current`: today's prompt. **Checked: all 18 eval prompts are character-for-character identical to the old code.**
+   - `explain_rule`: the prompt says "La décision a déjà été prise par les règles du contrat : « Décision : X »", then "Commence ta réponse exactement par « Décision : X », puis explique pourquoi avec les clauses. Ne change pas la décision."
+   - `formula_hint`: the current prompt plus one sentence built from `config.yaml` `formulas`. For TIERS: "…ne contient que la responsabilité civile et la défense et recours : elle paie les dommages causés aux autres, mais PAS les dommages au véhicule de l'assuré." For TR: the list of guarantees that pay for the customer's own car. The verdict is not given.
+   - An unknown variant, or `explain_rule` without a verdict, raises a `ValueError`.
+2. `agents/policy/agent.py`: passes the rules' verdict (`covered`) to `build_prompt`.
+3. `agents/policy/config.yaml`: `llm.prompt_variant: current` (new key, with a comment).
+4. `agents/policy/evaluate.py`: `--prompt-variant` option (in memory, like `--model`). MLflow param `llm_prompt_variant` + tag `prompt_variant`; run name `eval-<model>-<variant>`.
+5. Tests: `tests/policy/test_generation.py` (current unchanged and default, explain_rule wording for both verdicts, explain_rule without verdict = error, formula_hint for TIERS and TR, unknown variant = error, `--prompt-variant` override) and `tests/policy/test_agent.py` (the agent passes the rules' verdict). **226 passed**, ruff clean.
+
+### Results (qwen2.5:7b, `--max-tokens 1024`, temperature 0, 30 eval claims = 18 LLM calls)
+
+| Metric | current | explain_rule | formula_hint |
+|---|---|---|---|
+| MLflow run | `bdc2dc63bd2e482baeacd78def439d40` (entry 9) | `ca98f6e62c944b08b5a8bd89b16852af` | `423e890731824d6fa5678ec82e38cdaa` |
+| coverage_accuracy (30 claims) | 73.3 % | **96.7 %** (= template) | 83.3 % |
+| Contradictions (→ `covered=None`) | 7 / 18 (E03, E04, E10, E13, E17, E24, E25) | **0** | 4 / 18 (E03, E04, E17, E24: all TIERS) |
+| Agrees with the rule | 61.1 % | 100 % | 77.8 % |
+| Cites a retrieved clause | 77.8 % | 72.2 % | 77.8 % |
+| Invented citation | 0 % | 0 % | 0 % |
+| Cites a correct (expected) clause, all claims | 64 % | 52 % | 56 % |
+| Format OK / wrong language | 100 % / 0 % | 100 % / 0 % | 100 % / 0 % |
+| Fallback to template | 0 | 0 | 0 |
+| Seconds per answer, mean / median / max | 20.1 / 20.6 / 31.7 | 54.2 / 53.3 / 78.3 | 51.9 / 54.2 / 71.7 |
+
+**Seconds are not comparable between `current` and the two new runs.** `current` ran on the host Ollama (native Windows, nothing else loaded). The two new runs used the Docker Ollama (WSL, `api` and `ui` containers running beside it), so they would not load a second 5 GB copy of the model. The prompts are almost the same length, so the 2.5× is most likely the environment. A fair time comparison needs `current` rerun on the Docker Ollama (question 2).
+
+### E03 and E13 answers
+
+**E03** (AXA-**TIERS**, collision, rule: NON COUVERT, expected: false)
+- current, contradiction → `covered=None`: "Décision : COUVERT [AXA-015]. Le sinistre est couvert par la garantie dommage collision, car il s'agit d'une collision avec un autre véhicule, ce qui est inclus dans la formule TIERS de l'assurance AXA."
+- explain_rule, `covered=False`: "Décision : NON COUVERT [AXA-016-2, AXA-014-2]". Right verdict, but **no explanation at all**: only the verdict line and two clause ids. The format metric still counts it as OK (it starts with the decision, ≤ 4 sentences).
+- formula_hint, still a contradiction → `covered=None`: "Décision : COUVERT [AXA-015]. Le sinistre est une collision avec un autre véhicule, ce qui est couvert par la garantie dommage collision [AXA-015]." The hint sentence was ignored.
+
+**E13** (SANLAM-TR, fire, rule: COUVERT, expected: true)
+- current, contradiction → `covered=None`: "Décision : NON COUVERT [SANLAM-045, SANLAM-044]. Selon les clauses [SANLAM-045] et [SANLAM-044], la garantie R10 (Vol et incendie du véhicule Assuré au premier évènement) ne s'applique qu'au premier sinistre … De plus, les clauses d'exclusions prévues dans le risque 8 … ne permettent pas la couverture de l'incendie de la voiture stationnée, qui est une situation exclue."
+- explain_rule, `covered=True`: "Décision : COUVERT [SANLAM-045, SANLAM-071, SANLAM-044]. Selon les clauses [SANLAM-045] et [SANLAM-071], la garantie incendie du véhicule est couverte, même si aucun dommage physique n'est visible. De plus, la garantie R10 (Vol et incendie du véhicule Assuré) n'est pas exclue par les clauses [SANLAM-044], et l'incendie est une cause couverte par la formule TR de votre contrat."
+- formula_hint, `covered=True`: "Décision : COUVERT [SANLAM-045, SANLAM-071]. Selon la clause [SANLAM-045], la garantie R10 (Vol et incendie du véhicule Assuré) fait partie des garanties incluses dans la formule TR de votre contrat. Bien que les dommages soient visibles sur les photos, aucun dommage physique n'est mentionné. L'incendie qui a causé la perte totale de votre véhicule est couvert par la garantie R17 «Perte Totale-Incendie», qui est également incluse dans la formule TR." Right verdict, but one confused sentence about the photos.
+
+### What `explain_rule` changes for the contradiction safety check
+
+Today (`current`), the LLM gives its own verdict and the agent compares it with the rule. A disagreement sets `covered=None`, so a human decides. This works as an **independent second opinion**: when the LLM disagrees, nobody is told the claim was clear.
+
+With `explain_rule` the LLM is **told** the verdict and asked to start with it:
+- the check still runs, but it now only catches a model that **ignores the instruction**. 0 / 18 here: agreement is 100 % by construction, not because the model understood the contract;
+- the LLM can no longer flag a rule mistake. In this eval set the 7 contradictions of `current` were all LLM mistakes (the rule matched the expected label every time, so coverage accuracy goes back to the template's 96.7 %). On real claims, a wrong rule would now go out with a confident explanation and no human review;
+- the explanation may be thin (E03), or may justify the verdict with weak arguments, because the model is asked to defend an answer it did not reach.
+
+`formula_hint` keeps the independent check (the LLM still decides) and removes 3 of the 7 contradictions (E10, E13, E25), but not the 4 TIERS collision / glass claims.
+
+### Concepts
+
+- **Second opinion vs explanation**: an LLM that decides alone can catch a rule mistake, but can also be wrong (here: 7 times). An LLM that only explains cannot contradict, but cannot catch anything either.
+- **Confound in timing**: two runs differ in more than the variable you test (here the Ollama host), so their times cannot be compared.
+
+### Open questions for Mohamed
+
+1. **Which variant, if any, becomes the default?** (The default stays `current`.) Trade-off: `explain_rule` gives accuracy 96.7 % but no independent check; `formula_hint` keeps the check, with 83.3 %.
+2. **Rerun `current` on the Docker Ollama** (about 15 min) to compare seconds fairly?
+3. If `explain_rule` is chosen: should an answer with no explanation (like E03: verdict + ids only) count as a bad format, i.e. falls back to the template?
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
