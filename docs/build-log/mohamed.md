@@ -1381,6 +1381,65 @@ For comparison, 7b on E03: current = contradiction (COUVERT), explain_rule = ver
 
 ---
 
+## Entry 20 — Default prompt `explain_rule` + optional NVIDIA GPU for Ollama
+
+**Date:** 2026-11-20
+- `feat/policy-small-model`: commit `edf1f74` (default prompt variant).
+- `feat/ollama-gpu` (from `feat/policy-small-model`): `docker-compose.gpu.yml`, README, this entry.
+
+**Mohamed's decisions (Nov 20):** stay on qwen2.5:7b (no 3b), no `DANLAM` fix, **default prompt variant = `explain_rule`**, a human check of the explanations (Mohamed asks the teammates).
+
+### 1. Default prompt variant
+
+- `agents/policy/config.yaml`: `llm.prompt_variant: explain_rule`, with a comment saying why and what it costs: the contradiction check only catches a model that ignores the instruction (entry 14).
+- `tests/policy/test_generation.py`: the test named "current is the default" was renamed `test_current_variant_is_unchanged` (it sets `current` itself, so it never depended on the default). New test: `test_explain_rule_is_the_configured_default` reads `config.yaml`. No other test assumed the default. **237 passed**, ruff clean.
+- **Docker:** the config is copied into the `api` image, and the running image was built before this commit, so it still uses `current` (checked inside the container). `explain_rule` reaches Docker at the next `docker compose build api`. I did not rebuild, so the GPU test below uses the same prompt as the CPU test.
+
+### 2. `docker-compose.gpu.yml` (new)
+
+An override for the `ollama` service only: `deploy.resources.reservations.devices` = `driver: nvidia`, `count: all`, `capabilities: [gpu]`. The main `docker-compose.yml` is unchanged and CPU-only (checked: no `nvidia` in its config). Usage: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`. Nothing was installed on Windows: Docker Desktop's WSL 2 backend already passes the GPU.
+
+### 3. The container sees the GPU
+
+- Host: `nvidia-smi` → NVIDIA GeForce RTX 3050 Laptop GPU, driver 610.91, 4,096 MiB.
+- Ollama log: `inference compute … library=CUDA compute=8.6 … description="NVIDIA GeForce RTX 3050 Laptop GPU" … total="4.0 GiB" available="3.2 GiB"`.
+- After loading qwen2.5:7b (with the API's own `warm_policy_llm()`; only `ollama` was recreated, so the start-up warm-up did not run again): `ollama ps` → **`55%/45% CPU/GPU`**, 5.2 GB, context 4096. Log: `offloaded 12/29 layers to GPU`, 2,206 MiB on the GPU. GPU memory used: 2.9 of 4 GB. qwen2.5:7b does not fit in 4 GB, so 17 layers stay on the CPU. The first load took 125 s.
+
+### 4. Two new claims (texts never sent before), Docker, no MLflow
+
+| Claim | Text, photo | Seconds per claim | LLM call | Prompt reading (Ollama log) | Answer writing (Ollama log) |
+|---|---|---|---|---|---|
+| GPU-1 | SANLAM-TR, FR, "…le feu arrière gauche est fissuré", taillight photo (taillight crack 0.72) | 73.4 s | 32.7 s | 1,092 tok in 3.2 s = **345 tok/s** | 86 tok in 29.1 s = **2.92 tok/s** |
+| GPU-2 | AXA-TR, EN, "A van reversed into my car… front bumper", front-bumper photo (dent 0.86) | **20.5 s** | 19.8 s | 946 tok in 2.9 s = **331 tok/s** | 87 tok in 16.5 s = **5.22 tok/s** |
+
+Both claims: all agents real, decision status `langgraph`, LLM answer (`+qwen2.5:7b`), approve. Traces `f96974975f08874fb9e124c9a62dd526`, `b178f922aea4eb1ca2badd90d4108cd3`.
+
+GPU-1 lost **~35 s outside the LLM**: retrieval 28.5 s and vision 6.7 s (normally ~0.1–1.5 s). The `api` container had been idle for 30 min, so its libraries were cold. That is not related to the GPU. GPU-2 is the clean measurement.
+
+### Comparison with the CPU numbers (entry 13 follow-up, same prompt variant `current`, prompts never seen before)
+
+| | CPU only (Docker) | GPU 45 % (Docker) |
+|---|---|---|
+| Seconds per claim | 80.7 s (SPEED-1), 100.9 s (SPEED-2) | 73.4 s (GPU-1, ~35 s cold libraries), **20.5 s** (GPU-2) |
+| LLM call | 61.3 s (57 output tok), 100.6 s (210 output tok) | 32.7 s (86 output tok), 19.8 s (87 output tok) |
+| Prompt reading | about 20–25 tok/s (estimated: ~40–50 s for ~1,100 tokens) | **331–345 tok/s** (~3 s), about **15× faster** |
+| Answer writing | 3.3–4.05 tok/s | 2.9–5.2 tok/s: **about the same** |
+
+**Reading:** the GPU removes the prompt-reading cost (~45 s → ~3 s). Answer writing stays slow, because 17 of 29 layers still run on the CPU for every output token. A claim now costs roughly 5–10 s (agents) + 3 s (prompt) + output tokens / 3–5 tok/s. `explain_rule` answers are short, which should help further once the image is rebuilt.
+
+### Concepts
+
+- **Layer offloading:** a model that does not fit in VRAM is split. Some layers run on the GPU, the rest on the CPU, and each token passes through both, so the CPU part sets the pace of generation.
+- **Prompt vs generation:** reading the prompt processes many tokens in parallel (the GPU is very good at that); writing produces one token at a time (bound by memory speed and the CPU layers).
+
+### Open questions for Mohamed
+
+1. **Rebuild the `api` image** (`docker compose build api`, then up with the GPU override) so the Docker stack uses `explain_rule`? Not done, so the CPU/GPU comparison stayed fair.
+2. **Warm vision and retrieval at API start too?** GPU-1 lost ~35 s in cold YOLO / embedding code after the API was idle. Same idea as the LLM warm-up (entry 13 note).
+3. **qwen2.5:7b with only 45 % on the GPU:** acceptable, or try a smaller context (`num_ctx`) to fit a few more layers in 4 GB? (No model change, as decided.)
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**

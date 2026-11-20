@@ -192,6 +192,15 @@ Then open http://localhost:8501 (claims page) or http://localhost:8000/docs (API
 - Memory: `qwen2.5:7b` alone needs about 5 GB, and the `api` container (PyTorch, YOLO, embeddings) about 2 GB more. Docker Desktop on Windows gives WSL 50 % of the RAM by default; if a container is killed, raise `memory=` in `%UserProfile%\.wslconfig`.
 - Do not run the host Ollama app on port 11434 at the same time: stop it, or the published port may clash.
 
+**NVIDIA GPU (optional).** `docker-compose.gpu.yml` gives the NVIDIA GPU to the `ollama` service only; the main `docker-compose.yml` stays CPU-only for teammates without one:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+docker compose exec ollama ollama ps        # PROCESSOR: "100% GPU" or e.g. "55%/45% CPU/GPU"
+```
+
+It needs an NVIDIA driver on the host (`nvidia-smi` works) and Docker Desktop with the WSL 2 backend; nothing else to install. On a 4 GB laptop GPU (RTX 3050), qwen2.5:7b does not fit entirely: Ollama puts 12 of 29 layers on the GPU (55 % CPU / 45 % GPU). Reading the prompt becomes about 15× faster (~340 tokens/s), writing the answer stays at about 3–5 tokens/s (build log entry 20).
+
 ### Tracing (Langfuse)
 
 Each claim sent to `/claims` or `/claims/analyze` becomes one Langfuse trace, named with the `claim_id`. It contains one observation per step:
