@@ -1147,6 +1147,110 @@ With `explain_rule` the LLM is **told** the verdict and asked to start with it:
 
 ---
 
+## Entry 15 — Task 6: end-to-end evaluation harness
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` (stacked on `feat/policy-prompt-fix`) · **Commit:** `0a493bf`
+**Goal:** score the final decision of the **running** API on demo claims written by people.
+
+### Files
+
+1. `mlops/evaluate_e2e.py` (new): `python -m mlops.evaluate_e2e --claims <csv> [--api-url http://localhost:8000] [--output data/e2e/e2e_results.json] [--no-mlflow]`.
+   - It checks `/health`, sends each row to `POST /claims/analyze` (timeout 600 s for cold starts), and records: decision, confidence, decision status (`agents["decision"]`), each agent's status, seconds, Langfuse trace id, `match`.
+   - Scoring: `match` = decision == `expected_decision`; **`None` when `expected_decision` is empty (run, not scored)**; an API error on a scored claim counts as wrong.
+   - Metrics: n claims / scored / errors, accuracy, accuracy per expected class, human_review rate, decision counts, seconds mean / median / max.
+   - Output: a JSON file and MLflow (experiment **`claimspilot-decision`**, tag **`eval=e2e`**, params `api_url`, `claims_file`, `claims_md5`, `n_claims`, plus the 4 required tags).
+   - It refuses bad rows with their row number: missing column, empty or duplicate id, invalid `expected_decision`, missing photo / text / policy, template `EXAMPLE` rows.
+2. `tests/mlops/test_evaluate_e2e.py` (new, 9 tests, fake API with `httpx.MockTransport`): scoring only rows with a label, `|`-separated photos, API error = wrong, row checks, API down = clear message.
+3. `docs/test-sets/e2e/dry_run.csv`: 3 claims built from existing material, **`expected_decision` empty**. Texts of eval claims E01, E04, E23; dataset test photos (paths as mounted in Docker).
+4. `.gitignore`: `data/e2e/` (real demo claims and results stay out of git).
+
+### Dry run (Docker stack, MLflow run `b5a7f992b4884a2e8861eb270248be66`)
+
+| Claim | Text from | Photo (vision) | Decision | Status | Seconds | Trace |
+|---|---|---|---|---|---|---|
+| DRY-1 | E01 (AXA-TR collision, front bumper) | front_bumper dent | approve | langgraph | 52.1 | `8d826f6430738d64689e469e5e2fc277` |
+| DRY-2 | E04 (SANLAM-TIERS, front bumper + headlight, EN) | front_bumper dent | human_review | langgraph | 75.1 | `ee0a95c67cc64d13320d42769c7125a5` |
+| DRY-3 | E23 (AXA-TR, front bumper) | taillight crack | human_review | langgraph | 50.8 | `fbc73a76a1d1449443029cdcc752de96` |
+
+Not scored (no expected decision, as asked). n_errors 0.
+
+**How to run it (for the real demo set):**
+
+```
+docker compose up -d                                   # wait for 3 x healthy
+copy docs\test-sets\e2e\template.csv data\e2e\demo_claims.csv   # then fill it (humans), delete EXAMPLE rows
+python -m mlops.evaluate_e2e --claims data/e2e/demo_claims.csv
+```
+
+**Slow claims (50–75 s instead of 16–23 s this morning).** A direct test in the `ollama` container gives **4 tokens/s**. `ollama` uses 5.9 of the 7.4 GiB that WSL gives Docker, and `api` dropped from 900 MB to 426 MB: memory pressure in the WSL VM (models stay loaded now, keep-alive 24 h). The task 5 runs were slowed the same way. See question 1 of the morning summary (WSL memory).
+
+---
+
+## Entry 16 — Task 7: templates for the human-written test sets
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` · **Commits:** `2bad4cf`, `413e011`
+
+### What I read first
+
+- **Hend's NLP held-out format** (`data/nlp/validate_heldout.py`): exact columns `claim_id,language,text,photo_parts,true_parts,label`; files `data/nlp/{independent,wiem,mohamed}_claims.csv`; ≥ 120 claims, ≥ 40 per label, ≥ 15 from Wiem and from Mohamed; `fr`/`en` only; parts without `other`.
+- **Policy** (`data/policy/eval_claims.csv`): `claim_id,policy_id,language,text,damages,expected_covered,expected_clauses,category,note`.
+- **E2E** (task 6): `claim_id,photo_paths,text,policy_id,language,expected_decision,written_by`.
+
+### Files (`docs/test-sets/`)
+
+- `README.md`: the 3 sets (writers, size, what each measures), **the rule: writers must not read the rules, configs, prompts or code first** (they may read the contract PDFs), how to use a template.
+- `nlp-heldout/`, `policy-independent/`, `e2e/`: one `template.csv` each with **2 rows marked `EXAMPLE`** (format only, "not a real label"), and a README: who writes, how many, where the file goes, each column, the rule.
+  - NLP held-out: Mohamed 15, Wiem 15 (+ Hend's independent claims), owner Hend.
+  - Independent policy claims: about 30, by Wiem or Hend.
+  - E2E demo: 20–30, the team.
+- Safety: the e2e script and the policy evaluation **refuse rows whose id starts with `EXAMPLE`**. Hend's validator would accept them, and its README says to delete them.
+- `agents/policy/evaluate.py`: new **`--cases`** option, so the independent set can be evaluated (`--cases data/policy/independent_claims.csv`); `data_version` follows the file used. Tests: EXAMPLE rows refused, `--cases` reads another file. Two older tests that faked `load_cases` were updated for the new argument.
+
+I wrote no claim and no expected answer. The only example values are the 4 × 2 `EXAMPLE` rows, marked as format only.
+
+---
+
+## Entry 17 — Task 8: decision sheet for the 12 open questions
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` · **Commit:** `affa65c` · **File:** `docs/decisions/open-questions.md`
+
+**Which 12:** items 1–11 and 17 of the Nov 16 list (decision rules, policy rules, evaluation). The platform items 12–16 and 18 are mostly answered since then.
+
+For each question: today's behaviour, options, files / config / tests that would change, and **which eval claims change**. **No rule was changed:** policy options were run on in-memory copies of `config.yaml` (template answers, 30 eval claims); decision-level effects use Hend's real NLP agent + the policy rules + Wiem's decision rules on each eval claim.
+
+Main findings:
+
+| Question | Option B moves | Final decision |
+|---|---|---|
+| Q1 not covered + uncertain text | E10 | reject → human_review |
+| Q8 theft / fire with no damage | E08, E09, E12, E13 | human_review → approve (needs the cause in `PolicyResult`: a schema change) |
+| Q2 several causes | E06 | approve → human_review |
+| Q3 flood in TR | E21 (policy None → True) | none (still human_review) |
+| Q4 AXA without vandalism | E20 | human_review → **reject** |
+| Q9 more keywords | E11 (policy accuracy 96.7 → 100 %) | none |
+| Q5, Q7, Q17 | no eval claim | none |
+
+Today on the 30 eval claims: 8 approve, 5 reject, 17 human_review. These final decisions have no labels (the eval set labels coverage only).
+
+---
+
+## Entry 18 — Task 9: monitoring proposal (no code)
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` · **Commit:** `b31f660` · **File:** `docs/proposals/monitoring.md`
+
+Contents:
+- what exists (Langfuse per claim, MLflow per evaluation run, no stored record of live claims);
+- what Evidently could watch: decision and human_review rates and reasons, decision status (fallbacks), agent stubs, vision confidence and parts, text language and length, NLP and policy results, LLM template rate, latency, and later ground truth;
+- the record to store per claim (features, not raw text or photos);
+- 3 storage options: a prediction log in the API, an export from Langfuse, MLflow only;
+- how it fits with Langfuse (debug one claim), MLflow (version the reports), a GitHub Action (schedule);
+- effort: about 13–19 h with an API log, 15–23 h with a Langfuse export, without the human-feedback field;
+- pros, cons and 4 questions for the team. No choice made.
+
+`docs/proposals/app-options.md` (task 4) is still **not committed**, on purpose.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
