@@ -191,12 +191,16 @@ def build_prompt(claim_text: str, insurer: str, formula: str, bought: list[str],
     example = clauses[0]["clause_id"] if clauses else "AXA-015"
     included = ", ".join(GUARANTEE_FR.get(g, g) for g in bought)
     useful = ", ".join(GUARANTEE_FR.get(g, g) for g in needed)
+    length = "en 2 ou 3 phrases, "
     if variant == "explain_rule":
         verdict = VERDICT_FR[covered]
+        length = ""                              # the length is given just below
         instructions = [
             f"La décision a déjà été prise par les règles du contrat : « Décision : {verdict} ».",
-            (f"Commence ta réponse exactement par « Décision : {verdict} », puis explique "
-             "pourquoi avec les clauses. Ne change pas la décision."),
+            (f"Commence ta réponse exactement par « Décision : {verdict} », puis écris "
+             "2 phrases courtes (50 mots au maximum en tout)."),
+            ("Donne la vraie raison : la garantie concernée et si la formule du contrat "
+             "l'inclut. Ne change pas la décision."),
         ]
     else:
         instructions = [
@@ -207,7 +211,7 @@ def build_prompt(claim_text: str, insurer: str, formula: str, bought: list[str],
         contract.append(formula_hint(formula, bought))
     lines = [
         "Tu es un assistant pour gestionnaires de sinistres automobiles.",
-        ("Réponds en français, en 2 ou 3 phrases, en utilisant UNIQUEMENT la déclaration "
+        (f"Réponds en français, {length}en utilisant UNIQUEMENT la déclaration "
          "et les clauses ci-dessous. N'invente rien."),
         *instructions,
         f"Cite les identifiants des clauses utilisées entre crochets, par exemple [{example}].",

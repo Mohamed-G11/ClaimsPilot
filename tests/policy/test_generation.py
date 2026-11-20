@@ -157,6 +157,14 @@ def test_explain_rule_gives_the_rule_verdict_and_asks_only_to_explain():
     assert "« Décision : COUVERT »" in covered
 
 
+def test_explain_rule_asks_for_two_short_sentences_with_the_real_reason():
+    prompt = generation.build_prompt(**PROMPT_ARGS, covered=False, variant="explain_rule")
+    assert "2 phrases courtes (50 mots au maximum en tout)" in prompt
+    assert "Donne la vraie raison : la garantie concernée et si la formule du contrat" in prompt
+    assert "en 2 ou 3 phrases" not in prompt                        # no conflicting length
+    assert "Cite les identifiants des clauses" in prompt
+
+
 def test_explain_rule_without_a_verdict_is_an_error():
     with pytest.raises(ValueError):
         generation.build_prompt(**PROMPT_ARGS, variant="explain_rule")
