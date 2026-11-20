@@ -1320,6 +1320,67 @@ Contents:
 
 ---
 
+## Entry 19 — qwen2.5:3b vs qwen2.5:7b for the policy answers (no switch)
+
+**Date:** 2026-11-20 · **Branch:** `feat/policy-small-model` (from `feat/e2e-evaluation`) · **Commit:** this entry only (no code change)
+**Goal:** compare the smaller `qwen2.5:3b` (pulled by Mohamed) with `qwen2.5:7b` on the 3 prompt variants and on claim time. **`config.yaml` not changed** (still `qwen2.5:7b`, `prompt_variant: current`).
+
+### What was run
+
+1. `python -m agents.policy.evaluate --model qwen2.5:3b --max-tokens 1024 --prompt-variant <v>` for `current`, `explain_rule`, `formula_hint`: 30 eval claims = 18 LLM calls each, on the **Docker Ollama** (`OLLAMA_HOST=http://[::1]:11434`), logged to MLflow `claimspilot-policy`.
+2. SPEED-1 and SPEED-2 (same texts and photos as entry 13's speed test) sent to `/claims/analyze` with `POLICY_LLM_MODEL=qwen2.5:3b`.
+   - How: a temporary compose override in the scratchpad (not in the repo) recreated `api` with that one variable.
+   - Restored afterwards by recreating `api` from `docker-compose.yml`. Checked: no `POLICY_LLM_MODEL`, model in use `qwen2.5:7b`.
+
+WSL memory limit: 9.7 GiB. Both models stayed loaded (keep-alive 24 h), with no memory problem.
+
+### Results
+
+| Model | Variant | MLflow run | coverage_accuracy | contradictions | format OK | invented citations | seconds per answer (mean / median / max) |
+|---|---|---|---|---|---|---|---|
+| 7b | current | `bdc2dc63bd2e482baeacd78def439d40` | 73.3 % | 7 / 18 | 100 % | 0 % | 20.1 / 20.6 / 31.7 ⚠ host Ollama |
+| 7b | explain_rule | `ca98f6e62c944b08b5a8bd89b16852af` | 96.7 % | 0 / 18 | 100 % | 0 % | 54.2 / 53.3 / 78.3 |
+| 7b | formula_hint | `423e890731824d6fa5678ec82e38cdaa` | 83.3 % | 4 / 18 | 100 % | 0 % | 51.9 / 54.2 / 71.7 |
+| **3b** | current | `4d731b7015a64bfdbfa99a8783ecf6ca` | 76.7 % | 6 / 18 | 100 % | 16.7 % (3 answers) | 27.1 / 28.0 / 45.0 |
+| **3b** | explain_rule | `709a7c91254e4fa09c36f3fadf9a922a` | 96.7 % | 0 / 18 | 88.9 % (E03, E13 too long) | 0 % | 32.4 / 32.6 / 44.9 |
+| **3b** | formula_hint | `3921d2aa56424c63934c2a6858230814` | 73.3 % | 7 / 18 | 100 % | 22.2 % (4 answers) | 27.9 / 28.4 / 38.2 |
+
+| Seconds per claim (`/claims/analyze`, Docker, prompt never seen before) | 7b (entry 13 follow-up) | 3b |
+|---|---|---|
+| SPEED-1 (AXA-TR, FR, 1,056 prompt tokens) | 80.7 s (LLM 61.3 s, 57 output tokens) | **43.3 s** (LLM 25.0 s, 78 output tokens) |
+| SPEED-2 (SANLAM-TR, EN, 1,110 prompt tokens) | 100.9 s (LLM 100.6 s, 210 output tokens) | **33.9 s** (LLM 33.6 s, 150 output tokens) |
+
+Both 3b claims: all agents real, decision status `langgraph`, policy `policy-rag-v2+qwen2.5:3b`, approve. Traces `d375dda143272b92b97d5f51c673856a`, `7b3e7a79ba3a5eb2b2eaa59479b888d1`.
+
+⚠ **Comparable seconds:** all 3b runs and the 7b `explain_rule` / `formula_hint` runs used the Docker Ollama. The 7b `current` run (entry 9) used the host Ollama, so its 20.1 s cannot be compared. On the same Docker Ollama, **3b answers in about 27–32 s vs 52–54 s for 7b** (about 1.8× faster), and the two claims took **2.3× less time** on average.
+
+### Details behind the numbers
+
+- **"Invented" citations of 3b are misspelled ids**, not made-up clauses: `DANLAM-025`, `DANLAM-023`, `DANLAM-028` instead of `SANLAM-0xx` (current: E02, E04, E24; formula_hint: E02, E04, E06, E24). They still match no retrieved clause, so the evidence link is broken for those answers. 7b made no such mistake.
+- **3b contradictions:** current: E03, E04, E13, E17, E24, E25 (like 7b, minus E10). formula_hint: E04, E09, E13, E17, E23, E24, E25. The hint **adds** contradictions on 3 TR claims (E09, E13, E23 → the 3b says "non couvert" when the rule says covered), while for 7b it removed 3.
+- **3b explain_rule:** 0 contradictions (the verdict is given), but the explanations can be wrong (see E03 below), and 2 answers break the "2 or 3 sentences" format.
+
+### E03 with qwen2.5:3b (AXA-TIERS, rear-end collision; rule: NON COUVERT; expected: false; retrieved: AXA-013, AXA-015, AXA-016-2, AXA-014-2)
+
+- **current**, contradiction → `covered=None`: "Décision : COUVERT [AXA-015] Dommages collision couvre parfaitement le sinistre décrit par le client. Le véhicule a été percuté à l'arrière au feu rouge, ce qui correspond à une collision avec un autre véhicule, ce qui est inclus dans les garanties de la clause [AXA-015]."
+- **explain_rule**, `covered=False` (right verdict), **wrong reasoning, format not OK**: "Decision : NON COUVERT En vertu de la clause [AXA-016-2] Exclusions de la garantie dommage collision, les dommages subis par le véhicule en raison d'une collision avec un autre véhicule sont exclus de la couverture. … De plus, la clause [AXA-014-2] … stipule que les dommages subis par le véhicule en raison d'une mise en fourrière sont également exclus … Le véhicule a été percuté au feu rouge, ce qui a entraîné un enfoncement du pare-chocs arrière, ce qui constitue une mise en fourrière. Par conséquent, la décision est NON COUVERT." The real reason (TIERS has no own-damage guarantee) is missing; the "fourrière" argument is invented.
+- **formula_hint**, `covered=False` (right verdict), **wrong reasoning**: "Décision : NON COUVERT [AXA-015] Dommages collision couvre les dommages causés par la collision avec un autre véhicule, … Cependant, [AXA-016-2] Exclusions de la garantie dommage collision exclut les dommages consécutifs à la mise en fourrière du véhicule, ce qui ne couvre pas le cas présent. De plus, [AXA-014-2] … exclut également les dommages causés par la mise en fourrière du véhicule."
+
+For comparison, 7b on E03: current = contradiction (COUVERT), explain_rule = verdict with ids and no explanation, formula_hint = contradiction (entry 14).
+
+### Concepts
+
+- **Model size vs speed on CPU:** a 3B model has fewer weights to read per token, so it reads prompts and writes answers faster (here about 2× per answer on the Docker Ollama).
+- **Right verdict ≠ right explanation:** the agreement metrics only read the "Décision :" line. The 3b reaches the right verdict for wrong reasons on E03; only a human read (or a check of the cited clauses' meaning) catches it.
+
+### Open questions for Mohamed
+
+1. **Switch to 3b?** It is about 2× faster per answer and per claim. Coverage accuracy is similar (76.7 % vs 73.3 % with `current`), but it misspells SANLAM ids (17–22 % of answers) and gives wrong explanations with a right verdict (E03). The config is not changed.
+2. If 3b: fix the misspelled ids in code (e.g. map `DANLAM-` → `SANLAM-` only when the corrected id was retrieved), or treat any unknown cited id as a bad answer (→ template)?
+3. Should evaluation include a human check of explanation quality (e.g. 10 answers per model read by a teammate)? The automatic metrics did not catch E03's invented "mise en fourrière" argument.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
