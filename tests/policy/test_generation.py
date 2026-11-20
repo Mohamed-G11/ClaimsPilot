@@ -91,7 +91,7 @@ def test_model_option_overrides_the_config_for_the_run(monkeypatch, tmp_path):
     monkeypatch.setitem(CONFIG["llm"], "model", "model-from-config")   # restored after
     monkeypatch.setitem(CONFIG["llm"], "max_tokens", 220)
     monkeypatch.setattr(evaluate, "RESULTS_FILE", tmp_path / "eval_results.json")
-    monkeypatch.setattr(evaluate, "load_cases", list)              # no claim
+    monkeypatch.setattr(evaluate, "load_cases", lambda path: [])  # no claim
     monkeypatch.setattr(evaluate, "warm_up", lambda: None)         # no Ollama call
     seen = {}
 
@@ -168,7 +168,7 @@ def test_unknown_variant_is_an_error():
 def test_prompt_variant_option_overrides_the_config_for_the_run(monkeypatch, tmp_path):
     monkeypatch.setitem(CONFIG["llm"], "prompt_variant", "current")
     monkeypatch.setattr(evaluate, "RESULTS_FILE", tmp_path / "eval_results.json")
-    monkeypatch.setattr(evaluate, "load_cases", list)
+    monkeypatch.setattr(evaluate, "load_cases", lambda path: [])
     monkeypatch.setattr(evaluate, "warm_up", lambda: None)
     seen = {}
 
