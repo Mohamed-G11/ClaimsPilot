@@ -3,6 +3,75 @@
 This file is my memory of the project: what was built, in which order, and why.
 It is updated at the end of every task.
 
+## Morning summary (Nov 20)
+
+**In one line:** the warm-start fix and tasks 5–9 are done and committed on stacked branches; **nothing is pushed**. The Docker stack is running (3 × healthy). Final branch: **236 tests passed**, ruff clean.
+
+### Done, per task
+
+| Task | State | Entry |
+|---|---|---|
+| Fix: LLM warm start + `OLLAMA_KEEP_ALIVE=24h` + test photos mounted in api / ui | done and checked on Docker: qwen2.5:7b loaded 30 s after start with no claim; first claim after a restart 69.5 s with an LLM answer (was 188 s and a template fallback) | 13 |
+| 5. Policy prompt variants (`current` default, `explain_rule`, `formula_hint`) | done, 2 runs logged; **default unchanged** | 14 |
+| 6. End-to-end evaluation harness (`python -m mlops.evaluate_e2e`) | done, dry run on 3 unlabelled claims, MLflow `claimspilot-decision` | 15 |
+| 7. Templates for the human-written test sets (`docs/test-sets/`) | done (+ `--cases` option for the policy evaluation) | 16 |
+| 8. Decision sheet for the 12 open questions (`docs/decisions/open-questions.md`) | done, no rule changed | 17 |
+| 9. Monitoring proposal (`docs/proposals/monitoring.md`) | done, no code | 18 |
+
+Task 5 in numbers (qwen2.5:7b, 30 eval claims):
+
+| | current | explain_rule | formula_hint |
+|---|---|---|---|
+| coverage_accuracy | 73.3 % | 96.7 % | 83.3 % |
+| contradictions | 7 / 18 | 0 / 18 | 4 / 18 |
+
+`explain_rule` gets 0 contradictions **because it tells the model the answer**: the contradiction check then no longer works as an independent second opinion (details in entry 14).
+
+### Tests
+
+| Branch | pytest | ruff |
+|---|---|---|
+| `fix/llm-warm-start` | 219 passed | clean |
+| `feat/policy-prompt-fix` | 226 passed | clean |
+| `feat/e2e-evaluation` (last) | **236 passed** | clean |
+
+### Branches and merge order (each one starts from the previous one)
+
+| # | Branch | Own commits | Head |
+|---|---|---|---|
+| 1 | `feat/policy-llm-choice` (already on GitHub at `ed2220b`) | 8 | `ed2220b` |
+| 2 | `feat/docker-full-stack` | 3 | `5fd673d` |
+| 3 | `feat/langfuse-tracing` | 5 | `800433e` |
+| 4 | `fix/llm-warm-start` | 3 | `37726f7` |
+| 5 | `feat/policy-prompt-fix` | 2 | `41f71e1` |
+| 6 | `feat/e2e-evaluation` | 6 | `1b01adb` |
+
+Merge 1 → 6 in this order. Each PR then shows only its own commits.
+
+### Questions waiting for you
+
+**New today**
+1. **WSL memory (speed).** Claims became 2–3× slower tonight (50–75 s instead of 16–23 s): Ollama generates 4 tokens/s, and the containers use about 6.4 of the 7.4 GiB that WSL gives Docker (default: 50 % of 16 GB), with the model kept loaded 24 h. Options: raise `memory=` in `%UserProfile%\.wslconfig` (e.g. 10GB) and restart WSL; or shorten `OLLAMA_KEEP_ALIVE`. I changed nothing (your machine's setting). Entry 15.
+2. **Prompt variant (entry 14):** keep `current`, or switch to `explain_rule` (accuracy 96.7 %, no independent check) or `formula_hint` (83.3 %, check kept)? Rerun `current` on the Docker Ollama (~15 min) for a fair time comparison? If `explain_rule`: should a verdict-only answer (E03: no explanation) fall back to the template?
+3. **The 12 rule and evaluation questions:** one page with options and the eval claims each one moves: `docs/decisions/open-questions.md` (Q1–Q11, Q17).
+4. **Test-set writers:** who writes the NLP held-out claims (Mohamed 15, Wiem 15), the independent policy claims (Wiem or Hend, ~30) and the e2e demo claims (20–30)? Templates: `docs/test-sets/`.
+5. **Monitoring (proposal, 4 questions):** prediction log in the API or export from Langfuse; store claim texts or only features; collect the handler's final decision in the UI (Wiem); owner.
+6. **App:** you decide today. `docs/proposals/app-options.md` is still uncommitted (task 4).
+
+**Still open from before**
+7. Wiem's stricter decision rules as the agreed defaults (entry 7).
+8. `scikit-learn` missing from every requirements file (Hend's NLP evaluation), and stray merge lines in `docs/progress/wiem.md` (entry 8).
+9. Platform items of the Nov 16 list not yet answered: pinning `requirements-vision.txt` / `requirements-ui.txt` (Wiem's), Python 3.11 vs 3.12 venv, the `.gitconfig` credential-helper typo.
+
+### Things to know (no question)
+
+- `.env`: I never opened, printed, searched, moved or renamed it. `docker compose` and the MLflow helper (`load_dotenv` in `mlops/tracking.py`) read it themselves when the tasks used the stack and MLflow.
+- **Host Ollama:** the instance I started by accident on Nov 20 is still running (tray icon). The evaluations used the Docker Ollama (`http://[::1]:11434`), so no second 5 GB copy was loaded.
+- **Langfuse:** a few test traces (claim ids `E2E-1`, `C-001`…) from one pytest run before `tests/conftest.py` existed can be deleted in the UI (entry 11).
+- **MLflow runs of the night:** `ca98f6e6…` (explain_rule), `423e8907…` (formula_hint), `b5a7f992…` (e2e dry run, new experiment `claimspilot-decision`).
+
+---
+
 ## Night summary (Nov 16)
 
 **In one line:** tasks A, 1, 2, 3, 4 and 5 are coded, tested and committed locally; **nothing could be pushed** (GitHub asked for a sign-in), the LLM answers could not be measured (model `phi3.5` not pulled) and the Docker image could not be built (Docker Desktop not running).
