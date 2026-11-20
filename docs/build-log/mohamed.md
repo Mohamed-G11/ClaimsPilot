@@ -1511,6 +1511,95 @@ The warm claim is slower than GPU-2 (20.5 s) because the answer is longer: `expl
 
 ---
 
+## Entry 22 — `/ready` and warm-up status; shorter `explain_rule` answers (kept)
+
+**Date:** 2026-11-20 · **Branch:** `feat/ollama-gpu` · **Commits:** `5b6c259`, `2dcfc1b`, `15efec1`, this entry
+**Mohamed's answers to entry 21:** 1) warm-up status in `/health` (always 200) + a `/ready` endpoint (503 until the warm-ups end), the e2e script waits on it, no edit to Wiem's UI (write what she would need); 2) try shorter `explain_rule` answers once, keep them only if they still give the real reason.
+
+### 1. Warm-up status, `/health`, `/ready` (`5b6c259`, `2dcfc1b`)
+
+- `api/warmup.py`: each step (`llm`, `vision`, `retrieval`, `decision`) has a state: `pending` → `running` → `done` or `failed`; `off` when `CLAIMSPILOT_WARMUP=0`. `status()` returns a copy (thread lock), and `is_ready()` is true when every step has **finished** (done, failed or off).
+- `GET /health`: **always 200** (Docker healthcheck, CI smoke test, UI unchanged), body `{"status": "ok", "warmup": {...}}`.
+- `GET /ready`: **503** while a step is pending or running, **200** after. Body `{"ready": …, "warmup": {...}, "failed": [...]}`.
+- **My interpretation, to confirm (question 1):** a step that *failed* counts as finished, so `/ready` becomes 200 and lists it in `failed`. If `/ready` waited for success, an API with Ollama down (or the CI light image without YOLO / Chroma) would never be ready, and the e2e script would wait until its timeout.
+- `mlops/evaluate_e2e.py`: before the first claim, polls `/ready` every 5 s (`--ready-timeout`, default 600 s), prints the warm-up states while waiting and any failed step. An API without `/ready` (404, older image) falls back to `/health`.
+- Tests: `/health` 200 while warming, `/ready` 503 → 200, failed step listed, states running → done/failed, off = ready (`tests/test_warmup.py`, `tests/test_health.py`); e2e waits for ready, gives up after the timeout without sending claims, falls back on 404 (`tests/mlops/test_evaluate_e2e.py`).
+
+**Live check** (all 3 containers recreated with the GPU override):
+
+```
+  0 s  /ready 503  llm running, vision running, retrieval pending, decision pending
+  2 s  /ready 503  llm running, vision done,    retrieval running, decision pending
+ 10 s  /ready 503  llm running, vision done,    retrieval done,    decision done
+133 s  /ready 200  all done
+```
+
+`/health` stayed 200 throughout. **First claim sent after `/ready` = 200 (READY-1, new text): 28.9 s**, the same as a warm claim: the 2-min model load no longer hits the first user.
+
+### What Wiem would need to change in `ui/app.py` to show "warming up" (not done: her file)
+
+1. Next to `api_is_up()` (which calls `/health`), add a call to `GET {API_URL}/ready`: 200 → ready; 503 → read `warmup` from the JSON; 404 → older API, treat as ready.
+2. When `/ready` is 503: show `st.info("The models are warming up (about 2 minutes after a restart)…")` with the state of each step (`llm`, `vision`, `retrieval`, `decision`), and disable the submit button (`st.form_submit_button(..., disabled=True)`).
+3. Refresh the status by itself: e.g. a "Check again" button, or `time.sleep(5)` then `st.rerun()` while not ready.
+4. If `failed` is not empty: show a warning ("the first claim may be slow") but allow submitting.
+5. Optional: her `httpx.post(..., timeout=120)` can stay; after `/ready` a claim takes about 15–30 s.
+
+### 2. Shorter `explain_rule` answers (`15efec1`), kept
+
+Prompt change, **`explain_rule` only** (`current` checked identical to the original code: 18 / 18 prompts):
+- the shared "en 2 ou 3 phrases" is removed for this variant;
+- new lines: "…puis écris 2 phrases courtes (50 mots au maximum en tout)." and "Donne la vraie raison : la garantie concernée et si la formule du contrat l'inclut. Ne change pas la décision."
+- The clause-citation line is unchanged. New test: `test_explain_rule_asks_for_two_short_sentences_with_the_real_reason`.
+
+Evaluation: 30 claims, qwen2.5:7b, `--max-tokens 1024`, GPU Docker Ollama, MLflow run **`ab6537ba477c4aaf84397b9843897508`**.
+
+| | explain_rule before (`ca98f6e62c944b08b5a8bd89b16852af`) | explain_rule short (`ab6537ba477c4aaf84397b9843897508`) |
+|---|---|---|
+| coverage_accuracy | 96.7 % | 96.7 % |
+| contradictions | 0 | 0 |
+| format OK | 100 % | 100 % |
+| invented citations | 0 % | 0 % |
+| cites a retrieved clause | 72.2 % | 88.9 % |
+| answers citing a correct clause (all claims) | 52 % | 64 % |
+| words per answer, mean / max | 54 / 93 | **28 / 38** |
+| seconds per answer, mean / median / max | 54.2 / 53.3 / 78.3 (CPU Docker) | **12.2 / 11.6 / 17.8** (GPU Docker) |
+
+⚠ Seconds: the old run had no GPU (entry 14), so the two columns differ by more than the prompt. The fair measure is the length: **answers are half as long**, so at ~5 tokens/s the writing time is roughly halved on the same hardware.
+
+**Real reason: my reading of the 18 answers.** The real reason = the guarantee concerned and whether the formula includes it.
+
+| Group | Before | Short |
+|---|---|---|
+| 13 TR claims, covered | 7 clear (guarantee + "formule TR"), 6 partial (guarantee only) | **11 clear**, 2 partial (E02 no formula; E25 odd: headlight as "glaces latérales") |
+| 5 TIERS claims, not covered | 0 clear, 2 partial (E04, E17 mention TIERS), 3 wrong or none (E03 none, E10 "délai dépassé", E24 "pas une collision") | **1 clear (E10)**, 1 partial (E24), **3 wrong** (E03, E04, E17) |
+| Total clear | 7 / 18 | **12 / 18** |
+
+The short version gives the real reason more often, so it is **kept**. TIERS stays the weak point in both versions: the model still invents reasons instead of "TIERS does not include this guarantee". This is a reading by me, not a human label: the human check of explanations you are organising should confirm it.
+
+**Side by side** (before → short):
+
+- **E03** (AXA-TIERS, rear-end collision, rule NON COUVERT)
+  - before: "Décision : NON COUVERT [AXA-016-2, AXA-014-2]" (no explanation)
+  - short: "Décision : NON COUVERT. La garantie collision n'est pas applicable car le véhicule n'a pas été impliqué dans une collision avec un autre véhicule. Dommage tous accidents exclut également les dommages non consécutifs à une collision. [AXA-015, AXA-014-2]" (**wrong reason**: it was hit by a car)
+- **E13** (SANLAM-TR, fire, rule COUVERT)
+  - before: "Décision : COUVERT [SANLAM-045, SANLAM-071, SANLAM-044]. Selon les clauses [SANLAM-045] et [SANLAM-071], la garantie incendie du véhicule est couverte, même si aucun dommage physique n'est visible. De plus, la garantie R10 … n'est pas exclue par les clauses [SANLAM-044], et l'incendie est une cause couverte par la formule TR de votre contrat." (57 words)
+  - short: "Décision : COUVERT. La garantie incendie est incluse dans la formule TR de votre contrat [SANLAM-045]. Cependant, la clause R8 exclut l'incendie non couvert par R10 [SANLAM-044]." (27 words; real reason first, then a confusing second sentence)
+- **E10** (AXA-TIERS, theft, rule NON COUVERT)
+  - before: "Décision : NON COUVERT [AXA-019-1, AXA-020-1]. Selon les clauses du contrat, le vol du véhicule est couvert, mais le délai de déclaration de trois jours ouvrables a été dépassé. De plus, la clause d'exclusion [AXA-020-1] stipule que le vol des clefs est non couvert, ce qui est le cas ici." (wrong reason)
+  - short: "Décision : NON COUVERT. La garantie vol de véhicule n'est pas incluse dans la formule TIERS d'AXA. [AXA-019-2] et [AXA-020-1] excluent cette garantie." (**real reason**)
+- **E17** (AXA-TIERS, windshield chipped by a stone, rule NON COUVERT)
+  - before: "Décision : NON COUVERT [AXA-021, AXA-022-1, AXA-022-2]. Les dommages au pare-brise par un caillou sont couverts par la garantie bris de glace [AXA-021]. Cependant, l'exclusion … [AXA-022-1] stipule que ce type de dommage n'est pas couvert par la formule TIERS d'AXA [AXA-022-2]."
+  - short: "Décision : NON COUVERT. La garantie bris de glace est exclue par la clause [AXA-022-1] qui stipule que les dommages causés par des cailloux sont exclus." (**wrong reason**: an exclusion instead of the TIERS formula)
+
+The `api` image was rebuilt with the short prompt (`/ready` 200 after 16 s, `ollama` kept the model loaded). **252 passed**, ruff clean.
+
+### Open questions for Mohamed
+
+1. **`/ready` and failed warm-ups:** OK that a *failed* step counts as finished (200, listed in `failed`), or should `/ready` stay 503 until every step succeeds?
+2. **TIERS explanations** stay wrong in 3 / 5 answers (E03, E04, E17). Since the rules already know the reason (`needed` guarantees not in `bought`), the prompt could state it ("La formule TIERS n'inclut pas la garantie collision") so the LLM only rephrases it. Or `formula_hint` + `explain_rule` together. Not done.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
