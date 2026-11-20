@@ -1,0 +1,3 @@
+claim_id,policy_id,language,text,damages,expected_covered,expected_clauses,category,note
+EXAMPLE-1,AXA-TR,fr,"EXAMPLE - format only, delete this row: Un camion a heurté ma portière au feu rouge.",door:dent,true,AXA-015,collision,EXAMPLE - not a real label
+EXAMPLE-2,SANLAM-TIERS,en,"EXAMPLE - format only, delete this row: My car was stolen last night.",,false,,vol,EXAMPLE - not a real label
