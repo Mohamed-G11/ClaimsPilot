@@ -213,6 +213,7 @@ function toEntry(analysis) {
     decision: decision.decision,
     confidence: decision.confidence,
     explanation,
+    answer: analysis.policy.answer || "",
     reasons,
     clauses: (analysis.policy.clauses || []).map((c) => ({ id: c.clause_id, text: c.text })),
     damages: (analysis.vision.damages || []).map((d) => ({ part: d.part, type: d.damage_type,
@@ -241,13 +242,21 @@ function renderResult(entry) {
                   el("p", {}, entry.explanation)));
   }
   if (entry.clauses.length) {
-    box.append(el("div", { class: "card" }, el("h2", {}, "Clauses citées"),
-      entry.clauses.map((c) => el("details", { class: "clause" },
-        el("summary", {}, c.id), el("p", {}, c.text)))));
+    // Clauses cited in the explanation first; the other evidence the agent checked
+    // (often exclusion clauses) stays folded, so it does not look like a reason.
+    const cited = entry.clauses.filter((c) => (entry.answer || "").includes(c.id));
+    const shown = cited.length ? cited : entry.clauses;
+    const others = entry.clauses.filter((c) => !shown.includes(c));
+    const clause = (c) => el("details", { class: "clause" }, el("summary", {}, c.id),
+                             el("p", {}, c.text));
+    box.append(el("div", { class: "card" }, el("h2", {}, "Clauses citées"), shown.map(clause),
+      others.length ? el("details", { class: "more" },
+        el("summary", {}, `Autres clauses vérifiées (${others.length})`), others.map(clause))
+        : null));
   }
   box.append(el("div", { class: "card" }, el("h2", {}, "Dommages détectés sur les photos"),
     entry.damages.length
-      ? el("ul", {}, entry.damages.map((d) => el("li", { class: "damage" },
+      ? el("ul", { class: "damages" }, entry.damages.map((d) => el("li", { class: "damage" },
           el("span", {}, `${PARTS[d.part] || d.part} – ${DAMAGE_TYPES[d.type] || d.type}`),
           el("span", {}, `${Math.round(d.confidence * 100)} %`))))
       : el("p", { class: "meta" }, "Aucun dommage détecté automatiquement.")));

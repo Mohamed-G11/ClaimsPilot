@@ -316,7 +316,11 @@ details.clause:first-of-type { border-top: 0; padding-top: 0; }
 details.clause summary { cursor: pointer; font-weight: 650; min-height: 32px; }
 details.clause p { color: var(--muted); font-size: 15px; margin-top: 6px; }
 
+ul.damages { list-style: none; padding: 0; }
 .damage { display: flex; justify-content: space-between; gap: 12px; }
+details.more { margin-top: 6px; color: var(--muted); }
+details.more > summary { cursor: pointer; min-height: 32px; font-size: 15px; }
+details.more details.clause { padding-left: 12px; }
 .damage span:last-child { color: var(--muted); white-space: nowrap; }
 
 /* --- history ------------------------------------------------------------- */
