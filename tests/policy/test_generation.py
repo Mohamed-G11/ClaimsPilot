@@ -37,7 +37,8 @@ def fake_ollama(monkeypatch):
         else:
             fake["sent"] = json.loads(request.data.decode("utf-8"))
             fake["url"] = request.full_url
-            answer = {"response": fake["response"], "done_reason": fake["done_reason"]}
+            answer = {"response": fake["response"], "done_reason": fake["done_reason"],
+                      "prompt_eval_count": fake.get("prompt_eval_count")}
         return io.BytesIO(json.dumps(answer).encode("utf-8"))
 
     monkeypatch.setattr(generation.urllib.request, "urlopen", urlopen)
@@ -190,3 +191,29 @@ def test_prompt_variant_option_overrides_the_config_for_the_run(monkeypatch, tmp
     assert seen["variant"] == "formula_hint"
     report = json.loads((tmp_path / "eval_results.json").read_text(encoding="utf-8"))
     assert report["llm_settings"]["prompt_variant"] == "formula_hint"
+
+
+# --- truncated prompt check ---------------------------------------------------------
+
+def test_full_prompt_gives_no_warning(caplog):
+    prompt = "x" * 3550                                  # ~1000 tokens at 3.55 chars / token
+    assert generation.warn_if_prompt_truncated(prompt, 1000, "qwen2.5:7b") is False
+    assert "truncated" not in caplog.text
+
+
+def test_too_few_prompt_tokens_logs_a_warning(caplog):
+    prompt = "x" * 9000                                  # at least 2000 tokens expected
+    with caplog.at_level("WARNING", logger="agents.policy.generation"):
+        assert generation.warn_if_prompt_truncated(prompt, 1200, "qwen2.5:7b") is True
+    assert "probably truncated" in caplog.text
+
+
+def test_unknown_token_count_is_not_a_truncation():
+    assert generation.warn_if_prompt_truncated("x" * 9000, None, "m") is False
+
+
+def test_ollama_call_checks_the_prompt_token_count(fake_ollama, caplog):
+    fake_ollama["prompt_eval_count"] = 10
+    with caplog.at_level("WARNING", logger="agents.policy.generation"):
+        assert generation.ollama_generate("Bonjour " * 500) == ANSWER   # answer still used
+    assert "probably truncated" in caplog.text

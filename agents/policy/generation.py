@@ -13,6 +13,7 @@ writes the sentence shown to the claims handler:
 A generator is just a function `prompt -> text`, so tests pass a fake one.
 """
 import json
+import logging
 import os
 import re
 import urllib.error
@@ -38,6 +39,12 @@ VERDICT_FR = {True: "COUVERT", False: "NON COUVERT"}
 CITATION = re.compile(r"\[([A-Z]+-\d+(?:-\d+)?)\]")
 VERDICT = re.compile(r"decision\s*(non couvert|couvert)")
 THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+# Truncation check: on our 18 eval prompts one token = 3.23 to 3.55 characters
+# (qwen2.5 tokenizer, build log entry 21). A prompt read in full gives at least
+# len(prompt) / MAX_CHARS_PER_TOKEN tokens; fewer means Ollama cut it (num_ctx).
+MAX_CHARS_PER_TOKEN = 4.5
+
+logger = logging.getLogger(__name__)
 
 
 class GeneratorUnavailable(RuntimeError):
@@ -87,11 +94,30 @@ def ollama_call(prompt: str) -> OllamaAnswer:
     if data.get("done_reason") == "length" and is_reasoning_model(host, cfg["model"]):
         raise GeneratorUnavailable(f"answer cut by max_tokens ({cfg['max_tokens']}) "
                                    f"on the reasoning model {cfg['model']}")
+    warn_if_prompt_truncated(prompt, data.get("prompt_eval_count"), cfg["model"])
     text = strip_thinking(data.get("response", ""))
     if not text:
         raise GeneratorUnavailable("Ollama returned an empty answer (or only reasoning text)")
     return OllamaAnswer(text=text, model=cfg["model"], input_tokens=data.get("prompt_eval_count"),
                         output_tokens=data.get("eval_count"))
+
+
+def warn_if_prompt_truncated(prompt: str, prompt_tokens: int | None, model: str) -> bool:
+    """Log a WARNING when Ollama read fewer prompt tokens than the prompt can have.
+
+    Ollama silently drops the start of a prompt longer than its context window
+    (num_ctx), and the answer is then written without the claim or the clauses.
+    Returns True when the prompt looks truncated.
+    """
+    if prompt_tokens is None:
+        return False
+    expected_min = int(len(prompt) / MAX_CHARS_PER_TOKEN)
+    if prompt_tokens < expected_min:
+        logger.warning("Ollama read %d prompt tokens, expected at least %d for %d characters: "
+                       "the prompt was probably truncated (num_ctx too small) - model %s",
+                       prompt_tokens, expected_min, len(prompt), model)
+        return True
+    return False
 
 
 @cache
