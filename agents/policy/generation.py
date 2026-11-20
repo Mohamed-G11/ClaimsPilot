@@ -171,29 +171,6 @@ def formula_hint(formula: str, bought: list[str]) -> str:
             "garanties pouvant le couvrir fait partie de la formule.")
 
 
-def rule_reason(covered: bool, formula: str, bought: list[str], cause: str | None,
-                needed: list[str]) -> str:
-    """The reason of the formula check (the only rule step that reaches the LLM), in French.
-
-    Used by prompt_variant explain_rule: the LLM rephrases it instead of inventing one.
-    """
-    about = (f"le sinistre déclaré ({CAUSE_FR[cause]})" if cause
-             else "les dommages visibles sur les photos")
-    if covered:
-        matching = [GUARANTEE_FR.get(g, g) for g in needed if g in bought] or [
-            GUARANTEE_FR.get(g, g) for g in needed]      # (the agent always has a match)
-        return (f"la formule {formula} inclut la garantie « {matching[0]} », qui couvre "
-                f"{about}.")
-    needed_fr = ", ".join(GUARANTEE_FR.get(g, g) for g in needed)
-    reason = (f"pour {about}, il faut une de ces garanties : {needed_fr} ; la formule "
-              f"{formula} n'en inclut aucune.")
-    if not [g for g in bought if g not in THIRD_PARTY_ONLY]:
-        reason += (f" La formule {formula} ne garantit que la responsabilité civile et la "
-                   "défense et recours : les dommages au véhicule de l'assuré ne sont pas "
-                   "couverts.")
-    return reason
-
-
 def build_prompt(claim_text: str, insurer: str, formula: str, bought: list[str],
                  cause: str | None, damages_fr: list[str], needed: list[str],
                  clauses: list[dict], covered: bool | None = None,
@@ -220,12 +197,10 @@ def build_prompt(claim_text: str, insurer: str, formula: str, bought: list[str],
         length = ""                              # the length is given just below
         instructions = [
             f"La décision a déjà été prise par les règles du contrat : « Décision : {verdict} ».",
-            ("Raison donnée par les règles : "
-             f"{rule_reason(covered, formula, bought, cause, needed)}"),
-            (f"Commence ta réponse exactement par « Décision : {verdict} », puis reformule "
-             "cette raison en 2 phrases courtes (50 mots au maximum en tout), en citant "
-             "les identifiants des clauses."),
-            "N'ajoute pas d'autre raison et ne change pas la décision.",
+            (f"Commence ta réponse exactement par « Décision : {verdict} », puis écris "
+             "2 phrases courtes (50 mots au maximum en tout)."),
+            ("Donne la vraie raison : la garantie concernée et si la formule du contrat "
+             "l'inclut. Ne change pas la décision."),
         ]
     else:
         instructions = [
