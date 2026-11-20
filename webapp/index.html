@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f4fd8">
+  <meta name="description" content="Déclarez un sinistre auto en quelques minutes.">
+  <title>ClaimsPilot – Déclaration de sinistre</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-button" id="back" type="button" aria-label="Retour" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <a class="brand" href="#/">ClaimsPilot</a>
+    <span class="step-count" id="step-count" aria-live="polite"></span>
+  </header>
+
+  <main id="app">
+    <!-- a) Accueil -->
+    <section class="screen" data-screen="accueil">
+      <div class="hero">
+        <div class="hero-icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48"><path d="M8 30l4-11a4 4 0 0 1 4-3h16a4 4 0 0 1 4 3l4 11v8a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2v-2H15v2a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2z"/><circle cx="15" cy="30" r="2.5"/><circle cx="33" cy="30" r="2.5"/></svg>
+        </div>
+        <h1>Déclarez un sinistre auto</h1>
+        <p class="lead">Quelques photos, une courte description : nous vérifions votre contrat et vous répondons en moins d'une minute.</p>
+      </div>
+      <div class="actions">
+        <a class="button primary" href="#/contrat">Nouvelle déclaration</a>
+        <a class="button secondary" href="#/declarations" id="history-link">Mes déclarations</a>
+      </div>
+    </section>
+
+    <!-- b) Contrat -->
+    <section class="screen" data-screen="contrat" hidden>
+      <h1>Votre contrat</h1>
+      <p class="hint">Choisissez votre assureur et votre formule.</p>
+      <fieldset class="choice-group">
+        <legend>Assureur</legend>
+        <div class="choices" id="insurers"></div>
+      </fieldset>
+      <fieldset class="choice-group">
+        <legend>Formule</legend>
+        <div class="choices" id="formulas"></div>
+      </fieldset>
+      <p class="error" id="contract-error" role="alert" hidden></p>
+      <div class="actions sticky">
+        <button class="button primary" id="contract-next" type="button" disabled>Continuer</button>
+      </div>
+    </section>
+
+    <!-- c) Photos -->
+    <section class="screen" data-screen="photos" hidden>
+      <h1>Photos des dommages</h1>
+      <p class="hint" id="photo-hint">Ajoutez de 1 à 5 photos nettes des dégâts.</p>
+      <div class="photo-buttons">
+        <label class="button secondary file-button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          Prendre une photo
+          <input type="file" accept="image/jpeg,image/png" capture="environment" id="camera-input">
+        </label>
+        <label class="button secondary file-button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 16l5-5 4 4 3-3 4 4"/></svg>
+          Choisir dans la galerie
+          <input type="file" accept="image/jpeg,image/png" multiple id="gallery-input">
+        </label>
+      </div>
+      <p class="error" id="photo-error" role="alert" hidden></p>
+      <ul class="previews" id="previews" aria-label="Photos ajoutées"></ul>
+      <div class="actions sticky">
+        <button class="button primary" id="photos-next" type="button" disabled>Continuer</button>
+      </div>
+    </section>
+
+    <!-- d) Description -->
+    <section class="screen" data-screen="description" hidden>
+      <h1>Que s'est-il passé ?</h1>
+      <label class="field">
+        <span>Décrivez ce qui s'est passé</span>
+        <textarea id="text" rows="6" maxlength="2000"
+          placeholder="Exemple : en reculant sur un parking, j'ai heurté un poteau. Le pare-chocs arrière est enfoncé."></textarea>
+      </label>
+      <label class="field">
+        <span>Langue de la description</span>
+        <select id="language">
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+          <option value="ar">العربية</option>
+        </select>
+      </label>
+      <div class="summary" id="summary"></div>
+      <div class="actions sticky">
+        <button class="button primary" id="send" type="button" disabled>Envoyer ma déclaration</button>
+      </div>
+    </section>
+
+    <!-- e) Envoi -->
+    <section class="screen" data-screen="envoi" hidden>
+      <h1 id="sending-title">Analyse en cours…</h1>
+      <p class="hint" id="sending-hint" aria-live="polite">Cela prend généralement moins d'une minute. Gardez cette page ouverte.</p>
+      <ol class="steps" id="steps">
+        <li data-step="photos">Analyse des photos</li>
+        <li data-step="description">Lecture de la description</li>
+        <li data-step="contrat">Vérification du contrat</li>
+        <li data-step="decision">Décision</li>
+      </ol>
+      <div class="error-box" id="send-error" role="alert" hidden>
+        <p id="send-error-text"></p>
+        <div class="actions">
+          <button class="button primary" id="retry" type="button">Réessayer</button>
+          <a class="button secondary" href="#/description">Modifier ma déclaration</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- f) Résultat -->
+    <section class="screen" data-screen="resultat" hidden>
+      <div id="result"></div>
+      <div class="actions">
+        <a class="button primary" href="#/contrat" id="result-new">Nouvelle déclaration</a>
+        <a class="button secondary" href="#/declarations">Mes déclarations</a>
+      </div>
+    </section>
+
+    <!-- g) Mes déclarations -->
+    <section class="screen" data-screen="declarations" hidden>
+      <h1>Mes déclarations</h1>
+      <p class="hint" id="history-note">Enregistrées uniquement sur cet appareil.</p>
+      <ul class="history" id="history"></ul>
+      <div class="actions">
+        <a class="button primary" href="#/contrat">Nouvelle déclaration</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

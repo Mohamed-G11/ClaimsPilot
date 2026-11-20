@@ -60,6 +60,8 @@ ENV HF_HOME=/cache/huggingface \
 COPY claimspilot ./claimspilot
 COPY agents ./agents
 COPY api ./api
+# customer web app, served by the API at /app
+COPY webapp ./webapp
 
 # ---- ui: Streamlit claims page (independent of the API images) ----------------
 FROM python:3.11-slim AS ui

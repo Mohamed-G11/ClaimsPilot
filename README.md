@@ -213,6 +213,24 @@ The trace output is the decision, confidence and status, and `Decision.trace_id`
 - Keys: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` in `.env` (see `.env.example`); docker compose passes them to `api`.
 - Optional and safe: no library or no keys = no tracing, and the pipeline runs exactly as before. Langfuse errors are ignored. `CLAIMSPILOT_TRACING=0` turns it off. Tests never call Langfuse (`tests/conftest.py`).
 
+## Web app (customer, mobile)
+
+A small mobile web app for customers, in French, served by the API at **`/app`** (plain HTML, CSS and JavaScript in `webapp/`, no build step). Screens: home, contract (insurer + formula), photos (camera or gallery, 1 to 5), description, sending (waits for `/ready`), result (decision badge, explanation, cited clauses, detected damages), and a history of past claims kept in the browser (`localStorage`, only on that device). Wiem's Streamlit page (`ui/`) stays the claims handler's view.
+
+It calls `GET /claims/options` (contracts and limits) and `POST /claims/upload` (multipart: 1–5 JPEG/PNG photos, `text`, `policy_id`, `language`). The upload saves the photos in `data/uploads/<claim_id>/` and runs the same pipeline as `/claims/analyze`. Photo size limit: `CLAIMSPILOT_MAX_PHOTO_MB` (default 10).
+
+**On the laptop** (stack running, `docker compose ps` healthy): open http://localhost:8000/app/
+
+**From a phone on the same Wi-Fi:**
+
+1. Find the laptop's IP address: run `ipconfig` in PowerShell and read the `IPv4 Address` of the Wi-Fi adapter (e.g. `192.168.1.23`).
+2. Windows blocks incoming connections by default: allow TCP port 8000 for private networks in the Windows Defender Firewall (an inbound rule; to be added by the laptop's owner).
+3. On the phone, open `http://<laptop-IP>:8000/app/` (e.g. `http://192.168.1.23:8000/app/`).
+
+The phone camera button uses `capture="environment"`; some browsers only open the camera on a secure page (`https://`). If the camera does not open, the "Choisir dans la galerie" button still works with photos already taken.
+
+Screenshots (390 × 844): `docs/screenshots/web-app/`. To regenerate them: `pip install playwright==1.65.2`, `python -m playwright install chromium`, then `python -m mlops.webapp_screenshots` (sends one real claim).
+
 ## Team workflow
 
 - **Branches:** `git checkout main` → `git pull` → `git checkout -b <type>/<area>-<desc>` (e.g. `feat/vision-agent`). Never push to `main`, never work from a fork.
