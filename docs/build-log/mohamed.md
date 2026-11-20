@@ -1661,6 +1661,73 @@ The `explain_rule` prompt then said "Raison donnée par les règles : …", "…
 
 ---
 
+## Entry 24 — Customer mobile web app (`/app`) and photo upload endpoint
+
+**Date:** 2026-11-20 · **Branch:** `feat/web-app` (from `main` = all previous branches merged, PR #31) · **Commits:** `bd3c05b`, `36a6d23`, `1d0ffe0`, `73aaaf4`, `6a9114d`, this entry
+**Mohamed's decisions:**
+- a mobile web app served by the API, screens in French, for customers only;
+- Wiem's Streamlit page stays the handler's view (`ui/` not touched);
+- a simple history of past claims.
+
+### Files, in order
+
+1. **`api/upload.py`** (new router):
+   - `GET /claims/options`: the valid contracts read from `agents/policy/config.yaml` (insurers × formulas: `AXA-TR`, `AXA-TIERS`, `SANLAM-TR`, `SANLAM-TIERS`) with readable French formula names ("Tous risques", "Au tiers (responsabilité civile)"), `max_photos` 5, `max_photo_mb`, languages.
+   - `POST /claims/upload`, `multipart/form-data`: `photos` (1–5), `policy_id`, `text`, `language`.
+     - Checks: known policy and language; 1–5 photos; size ≤ `CLAIMSPILOT_MAX_PHOTO_MB` (default 10); **real JPEG/PNG by magic bytes**, not by file name.
+     - Saves the photos as `data/uploads/WEB-<10 hex>/photo_<n>.jpg|png` (`CLAIMSPILOT_UPLOADS_DIR`), then runs `analyze_claim()`: the **same pipeline and response as `/claims/analyze`**.
+     - Errors are JSON with a stable code for the web app: `{"detail": {"code": "photo_too_large", "message": …, "filename": …, "max_photo_mb": …}}`, with 400 `unknown_policy` / `unknown_language` / `too_many_photos`, 413 `photo_too_large`, 415 `not_an_image`, 422 when no photo field.
+   - No authentication, no CORS (same origin).
+2. `api/main.py`: includes the router; mounts `webapp/` at **`/app`** (`StaticFiles`, `html=True`) only when the folder exists, so the light CI image still starts.
+3. `requirements.txt`: **`python-multipart==0.0.34`** (needed by FastAPI for file uploads; in every image, because the route is part of the API).
+4. `tests/test_upload.py` (new, 11 tests): tiny images generated in the test (a valid PNG built with `zlib`, JPEG magic bytes), a temporary uploads folder.
+   - options list the 4 contracts with names;
+   - photos saved, and the `ClaimInput` built as expected;
+   - same response keys as `/claims/analyze`;
+   - end to end with stub agents (`safety: stub used` → human_review);
+   - every error code, with nothing saved and the pipeline never called;
+   - size limit;
+   - `/app/` served.
+5. **`webapp/`** (new: `index.html`, `styles.css`, `app.js`; plain HTML/CSS/JS, no framework, no build step). Mobile first, max width 560 px, 56 px touch targets, light and dark themes, sticky bottom buttons, hash routes so the phone's back button works.
+   - **Accueil**: title, "Nouvelle déclaration", "Mes déclarations (n)".
+   - **Contrat** (step 1/3): insurer buttons from `/claims/options`; formula buttons with one line each ("Couvre aussi les dommages à votre véhicule." / "Couvre les dommages causés aux autres.").
+   - **Photos** (step 2/3): "Prendre une photo" (`capture="environment"`) and "Choisir dans la galerie" (`multiple`); previews with a 44 px remove button; checked in the browser (JPEG/PNG, size, 5 max) with French messages.
+   - **Description** (step 3/3): "Décrivez ce qui s'est passé" with an example placeholder, the text's language, and a summary (contract, number of photos).
+   - **Envoi**: first waits on `/ready` ("Préparation du système…" while it answers 503), then 4 steps (photos, description, contrat, décision). The API answers once at the end, so **the steps show progress on a timer, not live server events**; all are ticked when the answer arrives.
+   - **Résultat**: a big badge (Acceptée green, Refusée red, Examen par un conseiller orange), "Pourquoi … ?" (the API's English review reasons mapped to French sentences; unknown ones are not shown), "Ce que dit votre contrat" (the policy answer without its leading "Décision : COUVERT…" line, which can differ from the final decision), "Clauses citées" (the clauses cited in the explanation, the other evidence folded under "Autres clauses vérifiées (n)"), and the detected damages in French with their confidence.
+   - **Mes déclarations**: `localStorage` (key `claimspilot.history.v1`, last 30, no photos stored). Every read and write is in `try/catch`; without storage the page says the history is not available on this device and the rest of the app works. Tap an entry to see its result again.
+   - Errors in French: network, timeout, not ready after 6 min, and each API error code. Text coming from the API or the LLM is always inserted as text (`textContent`), never as HTML.
+6. `Dockerfile`: the `full` image copies `webapp/`. (`.dockerignore` does not exclude it.)
+7. `mlops/webapp_screenshots.py`: Playwright script (`playwright==1.65.2`, Chromium installed with `python -m playwright install chromium`; dev tool only, not in a requirements file, not in CI). It drives the real app at 390 × 844 (mobile, touch) and sends one **real** claim. Two states are simulated in the browser only (route interception): `/ready` answering 503, and a PDF added as a photo.
+8. `docs/screenshots/web-app/`: the 10 screenshots. `README.md`: section "Web app (customer, mobile)".
+
+### Check on the Docker stack (GPU override, new api image)
+
+- `/ready` 200 after 13–21 s (Ollama kept the model loaded). `/app/`, `/app/app.js`, `/app/styles.css` and `/claims/options` served with the right content types.
+- Real claim through the web app (AXA · Tous risques, dataset front-bumper photo, "…j'ai heurté un poteau en béton. Le pare-chocs avant est enfoncé."):
+  - result **Acceptée**, answered in **11.9 s** (first run) and **7.8 s** (second run);
+  - "Ce que dit votre contrat : La garantie collision est incluse dans la formule TR de votre contrat [AXA-015]…", clause cited AXA-015, damage "Pare-chocs avant – enfoncement 89 %";
+  - photo saved in `data/uploads/WEB-…/photo_1.jpg` (git-ignored).
+- History: the claim is listed (date, "AXA · Tous risques", green "Acceptée") and opens its result again.
+- Screenshots: `01-accueil`, `02-contrat`, `03-photos`, `03b-photos-erreur`, `04-description`, `05-envoi`, `05b-envoi-preparation`, `06-resultat` (full page), `07-declarations`, `08-resultat-depuis-historique`.
+- `ruff` clean, **263 passed**.
+
+Found while reviewing the screenshots, and fixed (`1d0ffe0`): the result first listed all 4 clauses returned as evidence, including 2 **exclusion** clauses for an accepted claim, which could worry a customer.
+
+### Concepts
+
+- **Same origin:** the page and the API share `http://<host>:8000`, so the browser allows the calls without CORS.
+- **`multipart/form-data`:** how a browser sends files and fields in one request; FastAPI needs `python-multipart` to read it.
+- **Magic bytes:** the first bytes of a file tell its real type (JPEG `FF D8 FF`, PNG `89 50 4E 47…`), whatever its name or the type the browser claims.
+
+### Open questions for Mohamed
+
+1. **Camera on a phone over plain HTTP:** some mobile browsers open the camera only on a secure page (`https://`), and `http://192.168.x.x:8000` is not one. The gallery button always works. For the demo: test on your phone first, or serve over HTTPS (a reverse proxy with a certificate). Not done.
+2. **Uploaded photos are kept** in `data/uploads/` with no cleanup (personal data). Add a retention rule (e.g. delete after N days)?
+3. The 4 "steps" on the sending screen are timed, not real progress (the API answers once). OK for the demo, or should the API stream progress?
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
