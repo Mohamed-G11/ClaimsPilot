@@ -1440,6 +1440,77 @@ GPU-1 lost **~35 s outside the LLM**: retrieval 28.5 s and vision 6.7 s (normall
 
 ---
 
+## Entry 21 — Warm all agents at start-up, `num_ctx` test (not kept), truncation check, final GPU timings
+
+**Date:** 2026-11-20 · **Branch:** `feat/ollama-gpu` · **Commits:** `fc371d0`, `991dfbf`, this entry
+**Mohamed's answers to entry 20:** 1) rebuild the API image so Docker uses `explain_rule`; 2) warm vision and retrieval at start-up, same pattern as the LLM; 3) try a smaller context window, keep it only if claims clearly get faster **and** no prompt can be truncated, with a check on `prompt_eval_count`.
+
+### 1. Warm-ups (`api/warmup.py`, `fc371d0`)
+
+Two daemon threads start with the API: one warms the LLM (as before); the other runs, in order:
+- `warm_vision()`: the public `agents.vision.agent.run()` on a blank 640×640 image (loads YOLO + one inference);
+- `warm_retrieval()`: `agents.policy.agent.retrieve()` with a dummy query (embedding model + Chroma + one query);
+- `warm_decision()`: Wiem's `agents.decision.agent.run()` with her stubs (first LangGraph import and graph build; it cost 24.8 s in entry 11). Not asked explicitly; same pattern, no change to her files.
+
+Each step that fails is logged as a WARNING and never stops the API; `CLAIMSPILOT_WARMUP=0` turns all of it off (tests).
+
+Real check on the host venv: vision **4.1 s**, retrieval **12.5 s**, decision **0.9 s**, all OK. In Docker, the first claim then had vision 0.2 s, retrieval 0.1–0.2 s, decision 0.0 s (it was 6.7 s and 28.5 s in entry 20).
+
+Tests (`tests/test_warmup.py`, 7): two background threads, all off with the switch, each agent step logs its failure and returns False when the libraries are missing, the public entry points are called.
+
+### 2. Smaller context window: tested, **not kept**
+
+- **Longest prompt** over the 30 eval claims with `explain_rule`: measured exactly with Ollama (`prompt_eval_count`, 18 prompts) = **1,145 tokens** (shortest 604). Plus `max_tokens` 1,024 = **2,169**. So the smallest safe window is about 2,560 (today: Ollama's default for this GPU, 4,096).
+- **A/B on the same prompt** (E25, explain_rule, reload before each, same 144-token answer):
+
+| num_ctx | KV cache | layers on GPU | prompt | output | total |
+|---|---|---|---|---|---|
+| 2,560 | 140 MiB | 12 / 29 | 336 tok/s | 4.98 tok/s | 102.1 s |
+| 4,096 | 224 MiB | 12 / 29 | 407 tok/s | 4.77 tok/s | 96.9 s |
+
+The smaller window frees only 84 MiB of VRAM: not enough for one more 7b layer, so the CPU/GPU split stays 55 %/45 % and generation gains about 4 %. **Condition (a) cannot be met**, so `num_ctx` was not added to the config and no claim was run for it. `config.yaml` has no `num_ctx`.
+
+### 3. Truncation check (`agents/policy/generation.py`, `991dfbf`), kept
+
+Ollama silently drops the start of a prompt longer than `num_ctx`, and the answer is then written without the claim or the clauses. Measured on the 18 prompts: one token = **3.23 to 3.55 characters**. `warn_if_prompt_truncated()` logs a WARNING when `prompt_eval_count < len(prompt) / 4.5`, i.e. when Ollama read clearly fewer tokens than the prompt can have. The answer is still used (it is a warning, as asked). Kept although `num_ctx` was not changed: a very long claim text could also pass the 4,096 default. Tests: full prompt (no warning), too few tokens (warning), unknown count, and through `ollama_generate`. **243 passed**, ruff clean.
+
+### 4. Rebuild + final timings with the GPU override
+
+`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build --force-recreate`: all 3 containers recreated, `prompt_variant` in the api image = **`explain_rule`** (checked), `ollama ps` = `55%/45% CPU/GPU`. No warm-up failure in the logs.
+
+| Claim (texts never sent before) | Seconds per claim | LLM call | Ollama prompt | Ollama output | Decision |
+|---|---|---|---|---|---|
+| FINAL-1, first claim after the restart (AXA-TR, FR, cyclist, taillight photo) | **62.9 s** | 62.1 s (of which ~34 s waiting for the warm-up's model load) | 1,062 tok, 413 tok/s | 126 tok, 5.32 tok/s | human_review (NLP `uncertain`: text names rear bumper + taillight, photo shows taillight) |
+| FINAL-2, warm (SANLAM-TR, EN, low wall, front bumper photo) | **29.2 s** | 28.9 s | 996 tok, 532 tok/s | 148 tok, 5.46 tok/s | approve |
+
+Traces `d9cb2a9a30e321ac766c7d936f553b2c`, `e97a70178cc1c426a603d082a0af99d7`.
+
+**Why the first claim waited:**
+- The warm-up's own request ran from 10:43:11 to 10:45:11: loading qwen2.5:7b with the GPU takes **about 2 min** from disk.
+- Ollama already lists the model in `/api/ps` while it is still loading, so the first claim, sent 63 s after the API was healthy, queued behind the load (Ollama serves one request at a time).
+- A claim sent once the load is over takes about the warm time.
+
+**Compared with earlier:**
+
+| | CPU only | GPU 45 %, before (entry 20) | GPU 45 % + all warm-ups + explain_rule |
+|---|---|---|---|
+| First claim after restart | 69.5 s (entry 13, prompt seen before) | 73.4 s (35 s cold agents) | 62.9 s (34 s waiting for the model load) |
+| Warm claim, new prompt | 80.7 / 100.9 s | 20.5 s | 29.2 s |
+
+The warm claim is slower than GPU-2 (20.5 s) because the answer is longer: `explain_rule` answers here have 126–148 tokens vs 86–87 with `current` in entry 20, and writing stays at ~5 tok/s. Time is now almost all answer writing: about 0.2 s per output token.
+
+### Concepts
+
+- **mmap load:** Ollama maps the 4.7 GB model file into memory and copies 12 layers to the GPU; on this laptop that takes about 2 minutes after a container restart.
+- **Single request queue:** with `OLLAMA_NUM_PARALLEL=1`, a request that arrives during another one (here the warm-up) waits for it.
+
+### Open questions for Mohamed
+
+1. **Report warm-up status in `/health`** (e.g. `{"status": "ok", "warm": false}` until the 4 warm-ups end), so the UI and the e2e script can wait for it instead of hitting the 2-min model load? Not done (API change).
+2. **Shorter answers:** `explain_rule` answers are 126–148 tokens (~25 s at 5 tok/s). Lower `max_tokens` (it would need the reasoning-model guard to stay correct) or ask for "2 phrases" more strictly? Not changed.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
