@@ -6,7 +6,11 @@ time and the agent works whatever the folder it is started from.
     from agents.policy.settings import CONFIG, data_path
     data_path("clauses_file")   # -> <repo>/data/policy/processed/clauses.jsonl
 
-POLICY_CONFIG (env var) can point to another YAML file, e.g. in Docker.
+Env vars (optional; when unset, config.yaml is used as it is):
+- POLICY_CONFIG     another YAML file instead of config.yaml;
+- POLICY_LLM_MODEL  the Ollama model for the answers (overrides llm.model);
+- OLLAMA_HOST       the Ollama server (overrides llm.host; read at each call by
+                    generation.py, e.g. http://ollama:11434 in docker compose).
 """
 import os
 from pathlib import Path
@@ -17,7 +21,16 @@ HERE = Path(__file__).resolve().parent          # .../agents/policy
 REPO_ROOT = HERE.parents[1]                     # the folder holding agents/, data/, api/
 CONFIG_PATH = Path(os.getenv("POLICY_CONFIG", HERE / "config.yaml"))
 
-CONFIG: dict = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+
+def apply_env_overrides(config: dict, environ=os.environ) -> dict:
+    """Replace llm.model by POLICY_LLM_MODEL when it is set and not empty."""
+    model = environ.get("POLICY_LLM_MODEL", "").strip()
+    if model:
+        config["llm"]["model"] = model
+    return config
+
+
+CONFIG: dict = apply_env_overrides(yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")))
 
 
 def data_path(key: str) -> Path:

@@ -117,10 +117,10 @@ pip install -r requirements-policy.txt
 python -m agents.policy.index           # clauses -> Chroma index in data/policy/chroma/ (local, never committed)
 ```
 
-**6. Local LLM for the policy answers (optional).** Install [Ollama](https://ollama.com), pull a model, and put its name in `agents/policy/config.yaml` under `llm.model`. The team plans to use a Qwen model; the exact model is not chosen yet, and the file currently says `phi3.5`. Without Ollama, the agent writes a template answer, and its `model_version` ends with `+template` instead of the model name.
+**6. Local LLM for the policy answers (optional).** Install [Ollama](https://ollama.com) and pull the chosen model, `qwen2.5:7b` (`llm.model` in `agents/policy/config.yaml`; the env variable `POLICY_LLM_MODEL` overrides it). Without Ollama, the agent writes a template answer, and its `model_version` ends with `+template` instead of the model name.
 
 ```
-ollama pull <model-name>
+ollama pull qwen2.5:7b
 ```
 
 ## How to run
@@ -135,7 +135,7 @@ python -m agents.nlp.evaluate                 # NLP evaluation -> MLflow (--data
 python -m agents.vision.demo                  # vision agent on 3 test photos
 ```
 
-Useful environment variables: `OLLAMA_HOST` (default `http://localhost:11434`), `CLAIMSPILOT_API_URL` and `CLAIMSPILOT_UPLOADS` for the UI, `DECISION_CONFIG` (path of the decision rules file).
+Useful environment variables: `OLLAMA_HOST` (default `http://localhost:11434`), `POLICY_LLM_MODEL` (overrides `llm.model`), `CLAIMSPILOT_API_URL` and `CLAIMSPILOT_UPLOADS` for the UI, `DECISION_CONFIG` (path of the decision rules file).
 
 ### API endpoints
 
@@ -157,24 +157,52 @@ Example body:
 
 ### Docker
 
-One `Dockerfile`, two images:
+One `Dockerfile`, three images, and a `docker-compose.yml` that runs the full stack:
 
-| Target | Built by | Contains | Agents |
-|---|---|---|---|
-| `light` (default) | CI: `docker build --target light -t claimspilot-api .` | API + agent code, no heavy library | NLP real; vision and policy are stubs, so every claim goes to human review (safety rule) |
-| `full` | `docker compose build` | + PyTorch CPU, Ultralytics, sentence-transformers, Chroma, LangGraph | all real (weights and policy data mounted from your disk) |
+| Target | Built by | Contains |
+|---|---|---|
+| `light` (default) | CI: `docker build --target light -t claimspilot-api .` | API + agent code, no heavy library. NLP real; vision and policy are stubs, so every claim goes to human review (safety rule) |
+| `full` | `docker compose build` (service `api`) | + PyTorch CPU, Ultralytics, sentence-transformers, Chroma, LangGraph: all agents real |
+| `ui` | `docker compose build` (service `ui`) | Wiem's Streamlit page only (streamlit + httpx) |
 
-CI builds only the light image. Build the full image locally:
+`docker compose up` starts 3 services:
+
+| Service | Port | What |
+|---|---|---|
+| `ollama` | 11434 | official `ollama/ollama` image, CPU only. Its models folder is your host folder `OLLAMA_MODELS_DIR`, so `qwen2.5:7b` pulled on the host is reused (nothing is downloaded) |
+| `api` | 8000 | `full` image, reads `.env`, calls Ollama at `http://ollama:11434`. Starts when `ollama` is healthy |
+| `ui` | 8501 | Streamlit page, calls the API at `CLAIMSPILOT_API_URL` (default `http://api:8000`). Starts when `api` is healthy |
+
+CI builds only the light image. To run the full stack:
 
 ```
 dvc pull models/vision/yolov8s_merged_e30.pt.dvc data/policy/processed.dvc
+ollama pull qwen2.5:7b                       # once, on the host
+# in .env: OLLAMA_MODELS_DIR=C:/Users/<you>/.ollama/models   (see .env.example)
 docker compose build                                          # long the first time (several GB)
-docker compose run --rm api python -m agents.policy.index     # builds the policy index
+docker compose run --rm api python -m agents.policy.index     # builds the policy index (once)
 docker compose up -d
-curl http://localhost:8000/health
+docker compose ps                                             # wait until the 3 are "healthy"
 ```
 
-Model weights and data are never copied into the image: they are mounted as volumes. Ollama runs on the host, and the container reaches it at `host.docker.internal:11434`. Photos go in `data/uploads/` (mounted).
+Then open http://localhost:8501 (claims page) or http://localhost:8000/docs (API).
+
+- Model weights, policy data, Ollama models and the embedding model are never copied into an image: they are mounted as volumes.
+- Photos uploaded in the UI are saved in `data/uploads/`, mounted at the same path in `ui` and `api`.
+- Memory: `qwen2.5:7b` alone needs about 5 GB, and the `api` container (PyTorch, YOLO, embeddings) about 2 GB more. Docker Desktop on Windows gives WSL 50 % of the RAM by default; if a container is killed, raise `memory=` in `%UserProfile%\.wslconfig`.
+- Do not run the host Ollama app on port 11434 at the same time: stop it, or the published port may clash.
+
+### Tracing (Langfuse)
+
+Each claim sent to `/claims` or `/claims/analyze` becomes one Langfuse trace, named with the `claim_id`. It contains one observation per step:
+- `vision`, `nlp`, `policy`, and inside `policy`: `policy retrieval` and `policy LLM call` (a generation with model, prompt, answer, token usage and latency);
+- `decision`, with its status string and Wiem's LangGraph run (`LangGraph` → `vision`, `nlp`, `policy`, `decide`).
+
+The trace output is the decision, confidence and status, and `Decision.trace_id` returns the trace id to the caller.
+
+- Install: `pip install -r requirements-tracing.txt` (already in the full Docker image).
+- Keys: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` in `.env` (see `.env.example`); docker compose passes them to `api`.
+- Optional and safe: no library or no keys = no tracing, and the pipeline runs exactly as before. Langfuse errors are ignored. `CLAIMSPILOT_TRACING=0` turns it off. Tests never call Langfuse (`tests/conftest.py`).
 
 ## Team workflow
 

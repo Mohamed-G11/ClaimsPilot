@@ -25,3 +25,15 @@ def test_import_works_from_another_folder(tmp_path):
     done = subprocess.run([sys.executable, "-c", code, str(settings.REPO_ROOT)],
                           check=False, cwd=tmp_path, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+def test_policy_llm_model_env_overrides_the_config():
+    config = {"llm": {"model": "qwen2.5:7b"}}
+    assert settings.apply_env_overrides(config, {"POLICY_LLM_MODEL": "other:1b"})["llm"][
+        "model"] == "other:1b"
+
+
+def test_no_or_empty_env_keeps_the_config():
+    for environ in ({}, {"POLICY_LLM_MODEL": "  "}):
+        config = {"llm": {"model": "qwen2.5:7b"}}
+        assert settings.apply_env_overrides(config, environ)["llm"]["model"] == "qwen2.5:7b"

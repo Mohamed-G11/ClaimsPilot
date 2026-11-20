@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from agents.decision import agent as decision_agent
 from agents.decision import rules as decision_rules
+from api import tracing
 from claimspilot.schemas import (
     ClaimInput,
     Damage,
@@ -99,9 +100,56 @@ def nlp_real(claim: ClaimInput, vision: VisionResult) -> NLPResult:
     return run(claim, vision)
 
 def policy_real(claim: ClaimInput, vision: VisionResult) -> PolicyResult:
+    """Mohamed's agent. With tracing on, its retrieval and LLM call are traced too."""
     from agents.policy.agent import run
 
-    return run(claim, vision)
+    if tracing.client() is None:
+        return run(claim, vision)
+    return run(claim, vision, retriever=_traced_retriever, generator=_traced_generator)
+
+
+def _traced_retriever(query: str, insurer: str, guarantees: list[str], k: int,
+                      exclusions: bool) -> list[dict]:
+    """The policy agent's retrieval, as a "policy retrieval" observation."""
+    from agents.policy import agent as policy_agent
+
+    with tracing.observe("policy retrieval", as_type="retriever",
+                         input={"query": query, "insurer": insurer, "guarantees": guarantees,
+                                "k": k, "exclusions": exclusions}) as step:
+        found = policy_agent.retrieve(query, insurer, guarantees, k, exclusions)
+        step.update(output=[{"clause_id": c["clause_id"], "relevance": c["relevance"]}
+                            for c in found])
+        return found
+
+
+def _traced_generator(prompt: str) -> str:
+    """The policy agent's LLM call, as a "policy LLM call" generation (model, prompt,
+    answer, token usage; latency = start to end of the observation)."""
+    from agents.policy import generation
+    from agents.policy.settings import CONFIG
+
+    llm = CONFIG["llm"]
+    generate = generation.default_generator()
+    unavailable = None
+    with tracing.observe("policy LLM call", as_type="generation", model=llm["model"],
+                         input=prompt, model_parameters={
+                             "temperature": llm["temperature"],
+                             "max_tokens": llm["max_tokens"]}) as step:
+        try:
+            if generate is generation.ollama_generate:
+                answer = generation.ollama_call(prompt)
+                step.update(output=answer.text, usage_details={
+                    "input": answer.input_tokens or 0, "output": answer.output_tokens or 0})
+                return answer.text
+            text = generate(prompt)
+            step.update(output=text)
+            return text
+        except generation.GeneratorUnavailable as error:
+            # expected (no Ollama, timeout...): the agent uses its template answer,
+            # so a WARNING, not an ERROR; re-raised once the observation is closed
+            step.update(level="WARNING", status_message=f"template answer used: {error}"[:300])
+            unavailable = error
+    raise unavailable
 
 
 def _call(name: str, real, stub, *args, status: dict):
@@ -149,13 +197,29 @@ def make_decision(claim: ClaimInput, vision: VisionResult, nlp: NLPResult,
         return decision, f"safety: decision failed ({agent_error}, {type(error).__name__})"
 
 
+def _traced_call(name: str, real, stub, *args, status: dict):
+    """_call inside an observation named after the agent (output: its result and status)."""
+    with tracing.observe(name) as step:
+        result = _call(name, real, stub, *args, status=status)
+        step.update(output=result.model_dump(), metadata={"status": status[name]})
+        return result
+
+
 def analyze_claim(claim: ClaimInput) -> ClaimAnalysis:
+    """vision -> nlp -> policy -> decision; one Langfuse trace per claim when tracing is on."""
     status: dict[str, str] = {}
-    vision = _call("vision", vision_real, vision_stub, claim, status=status)
-    nlp = _call("nlp", nlp_real, nlp_stub, claim, vision, status=status)
-    policy = _call("policy", policy_real, policy_stub, claim, vision, status=status)
-    stubs = [name for name, state in status.items() if state != "real"]
-    decision, status["decision"] = make_decision(claim, vision, nlp, policy, stubs)
+    with tracing.claim_trace(claim) as root:
+        vision = _traced_call("vision", vision_real, vision_stub, claim, status=status)
+        nlp = _traced_call("nlp", nlp_real, nlp_stub, claim, vision, status=status)
+        policy = _traced_call("policy", policy_real, policy_stub, claim, vision, status=status)
+        stubs = [name for name, state in status.items() if state != "real"]
+        with tracing.observe("decision") as step, tracing.langchain_callbacks():
+            decision, status["decision"] = make_decision(claim, vision, nlp, policy, stubs)
+            step.update(output={**decision.model_dump(), "status": status["decision"]})
+        if root.trace_id:
+            decision = decision.model_copy(update={"trace_id": root.trace_id})
+        root.update(output={"decision": decision.decision, "confidence": decision.confidence,
+                            "status": status["decision"]})
     return ClaimAnalysis(vision=vision, nlp=nlp, policy=policy, decision=decision,
                          agents=status)
 

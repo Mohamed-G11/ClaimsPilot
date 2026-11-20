@@ -866,6 +866,217 @@ To try in sprint 4, measured with the same command: give the verdict in the prom
 
 ---
 
+## Entry 10 — Task 2: Docker full stack (ollama + api + ui)
+
+**Date:** 2026-11-20 · **Branch:** `feat/docker-full-stack` (stacked on `feat/policy-llm-choice`) · **Commits:** `4e8a07a`, `ee645e8`, this entry
+**Goal:** one `docker compose up` runs Ollama, the API with the real agents and the Streamlit UI; the policy answer comes from qwen2.5:7b inside Docker.
+
+### What existed before
+
+- `Dockerfile`: 3 stages, `base` (python:3.11-slim + `requirements.txt` + healthcheck + uvicorn), `full` (+ CPU PyTorch, `requirements-docker.txt`, `requirements-decision.txt`), `light` (CI). Never built locally before today.
+- `docker-compose.yml`: a single `api` service (target `full`) calling the **host** Ollama at `host.docker.internal:11434`; volumes `./models`, `./data/policy`, `./data/uploads`, `model-cache`.
+- `.dockerignore` excluded `ui/` (the UI had no image).
+- `api/`: `/health`, `/claims`, `/claims/analyze`; the pipeline needs no change for Docker.
+- `agents/policy/generation.py`: `OLLAMA_HOST` (env) already overrode `llm.host` at each call; the model came only from `config.yaml`.
+- `ui/app.py` (Wiem): already reads `CLAIMSPILOT_API_URL` (default `http://localhost:8000`) and `CLAIMSPILOT_UPLOADS`; it saves uploaded photos in that folder and sends their **absolute paths** to `POST /claims` (timeout 120 s).
+
+### Files, in order
+
+1. `agents/policy/settings.py`: `apply_env_overrides()`, where `POLICY_LLM_MODEL` (if set and not empty) replaces `llm.model`. Unset, nothing changes. `OLLAMA_HOST` stays where it was (`generation.py`, read at each call). Tests: `tests/policy/test_settings.py` (override / unset / empty) and `tests/policy/test_generation.py` (`OLLAMA_HOST` used for the request URL / config host when unset).
+2. `Dockerfile`: new stage `ui` (python:3.11-slim + `requirements-ui.txt` + `ui/`, port 8501, healthcheck on `/_stcore/health`, `streamlit run --server.headless`). Independent of the API stages, so it stays small (595 MB). `light` stays the last stage (CI default).
+3. `.dockerignore`: `ui` removed from the list (the `ui` stage needs it).
+4. `docker-compose.yml`: 3 services.
+   - `ollama`: `ollama/ollama:0.40.16` (**pinned to the same version as the host Ollama**, so it reads the same model files), CPU only, port 11434, volume `${OLLAMA_MODELS_DIR:-./data/ollama/models}:/root/.ollama/models`, `OLLAMA_NOPRUNE=1` (never deletes blobs in your shared folder), healthcheck `ollama list`.
+   - `api`: target `full`, port 8000, `models/vision` (read-only) + `data/policy` + `data/uploads` + `model-cache`, `env_file: .env` (`required: false`, so CI without `.env` still validates), `OLLAMA_HOST=http://ollama:11434`, starts when `ollama` is healthy, healthcheck `/health`.
+   - `ui`: target `ui`, port 8501, `CLAIMSPILOT_API_URL=${CLAIMSPILOT_API_URL:-http://api:8000}`, `CLAIMSPILOT_UPLOADS=/app/data/uploads` with the same `./data/uploads` volume as `api` (the UI sends absolute paths, so both containers must see the photo at the same path), starts when `api` is healthy.
+5. `.env.example`: `OLLAMA_MODELS_DIR=` documented. `.gitignore`: `data/ollama/` (the default, empty models folder).
+6. `README.md`: Docker section rewritten (3 images, 3 services, commands, memory, host-Ollama port note); the LLM setup lines now say `qwen2.5:7b` and `POLICY_LLM_MODEL`.
+
+### Checks (all passed)
+
+The stack was started with `OLLAMA_MODELS_DIR=C:/Users/moham/.ollama/models` set **in the shell only** (I may not edit `.env`; see question 1).
+
+| Check | Result |
+|---|---|
+| `docker compose up --build -d` | ollama healthy → api healthy → ui healthy (in about 1 min) |
+| `GET /health` | `{"status":"ok"}` |
+| From the api container: `http://ollama:11434/api/tags` | `['qwen3:4b', 'qwen2.5:7b']`: host models reused, nothing downloaded |
+| `POST /claims/analyze`, claim `DOCKER-CHECK-1` (AXA-TR, "Collision sur un parking, le pare-chocs avant est enfoncé.", one real test photo) | agents `vision/nlp/policy = real`, **decision status `langgraph`**; vision front_bumper/dent 0.89; NLP consistent 1.0; policy `covered=True`, `model_version = policy-rag-v2+qwen2.5:7b` (**LLM answer, not template**): "Décision : COUVERT [AXA-015]. Le sinistre est couvert par la garantie dommage collision, car il s'agit d'une collision sur un parking, …"; decision **approve 0.887** |
+| Time | first (cold) claim **4 min 47 s** (embedding model download into the volume + qwen2.5:7b load + YOLO load); warm claim **15.8 s** |
+| Memory (`docker stats`) | ollama 4.9 GB, api 0.9 GB, ui 55 MB, limit 7.4 GB (WSL default = 50 % of 16 GB). No container killed |
+| Port 8501 | HTTP 200, `/_stcore/health` = ok |
+| `ruff check .` / `pytest` | clean / **205 passed** (the vision integration test now runs: test images pulled) |
+
+The photo: I ran `dvc pull data/vision/car_dent_scratch_split/test/images` (366 images, 52 MB, ignored by git) and copied `back_light-1---92-…2883….jpg` to `data/uploads/check/front_bumper.jpg`. The stack is **left running**.
+
+### Things to know
+
+- **I started the host Ollama by accident.** Running `ollama list` on the host to check the models launched the Ollama app (it was not running before). It now listens on `127.0.0.1:11434` (PID 12900 at the time). My attempt to list and stop it was blocked by the permission system, so I left it. It did not prevent the container from publishing 11434, but two Ollama servers with qwen2.5:7b loaded would double the memory. You can quit it from the tray icon.
+- The `ollama/ollama:0.40.16` image is 5.1 GB (downloaded once).
+
+### Concepts
+
+- **Service name as host name**: inside compose, containers reach each other by service name (`http://ollama:11434`, `http://api:8000`), not `localhost`.
+- **`depends_on: condition: service_healthy`**: a container starts only when the healthcheck of the one it needs passes, so the API never starts before Ollama answers.
+- **Bind-mounting the host models folder**: the container reuses the 4.7 GB model already on disk instead of downloading it again. The version pin keeps the file format identical.
+
+### How to check
+
+```
+docker compose ps                        # 3 x healthy
+curl http://localhost:8000/health
+# open http://localhost:8501 and send a claim with one of the test photos
+```
+
+### Open questions for Mohamed
+
+1. **Add `OLLAMA_MODELS_DIR=C:/Users/moham/.ollama/models` to your `.env`.** I could not edit it. Without it, a later `docker compose up` (without my shell variable) mounts the empty default folder and the policy agent falls back to the template answer.
+2. **UI timeout (Wiem's file):** `ui/app.py` waits 120 s for `/claims`; the first claim after a cold start took 4 min 47 s, so it would show an error in the UI (the next ones take ~16 s). Options: Wiem raises the timeout, or we warm the models at API start (my side, `api/`). Not decided.
+3. **Test photos in the UI container:** the UI's "test photos from the dataset" list reads `data/vision/car_dent_scratch_split/test/images`, which is not mounted in Docker (the list is empty there). Mounting it in `ui` and `api` at the same path would enable it, but creates empty folders when the images are not pulled. Not done.
+
+---
+
+## Entry 11 — Task 3: Langfuse tracing (cloud)
+
+**Date:** 2026-11-20 · **Branch:** `feat/langfuse-tracing` (stacked on `feat/docker-full-stack`) · **Commits:** `6ed3cc1`, `5e35e01`, `9f94310`, this entry
+**Goal:** one Langfuse trace per claim, one observation per step, optional and safe.
+
+### SDK facts used (official docs + the installed package)
+
+- **langfuse 5.2.0** (latest on PyPI), pinned in the new `requirements-tracing.txt`. v5 needs Python 3.11+ and Langfuse Cloud (or self-hosted v4.59+).
+- Env vars: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, **`LANGFUSE_BASE_URL`**. `LANGFUSE_HOST` still works but is marked **deprecated** in the SDK. Your `.env` already uses `LANGFUSE_BASE_URL` (the task text said `LANGFUSE_HOST`), so `.env.example` documents `LANGFUSE_BASE_URL`, and the code also accepts `LANGFUSE_HOST`.
+- API: `start_as_current_observation(as_type="span" | "generation" | "retriever", name=…, input=…, model=…, model_parameters=…, usage_details=…)`, `propagate_attributes(trace_name=…, metadata=…, tags=…)`, `langfuse.langchain.CallbackHandler`. Removed in v5: `update_current_trace`, `api.trace.get` (the replacement is `api.observations.get_many`).
+- Without keys the SDK turns itself into a no-op client. Export runs in a background thread.
+
+### Files, in order
+
+1. `api/tracing.py` (new):
+   - `enabled()` = library installed + both keys + `CLAIMSPILOT_TRACING` not `"0"`;
+   - `client()` builds the client once (timeout 5 s);
+   - `observe()` is a context manager that never raises because of Langfuse; errors of the code inside are re-raised after marking the observation `ERROR`;
+   - `claim_trace()` is the root observation, with the trace name = `claim_id`, tag `claimspilot` and metadata `claim_id`;
+   - `langchain_callbacks()`: see "Wiem's LangGraph agent" below.
+2. `agents/policy/generation.py`: `ollama_call()` returns the text + model + token counts (`prompt_eval_count`, `eval_count`); `ollama_generate()` is unchanged for its callers.
+3. `api/pipeline.py`:
+   - `analyze_claim()` runs inside `claim_trace()`; `vision`, `nlp`, `policy` and `decision` are child observations (output = result + status);
+   - when tracing is on, the policy agent gets traced wrappers: `policy retrieval` (type retriever: query, insurer, guarantees → clause ids + relevance) and `policy LLM call` (generation: model, prompt, model parameters, answer, token usage; latency = observation duration). An LLM that is unavailable is a `WARNING` (the template is used), not an `ERROR`;
+   - trace output = decision, confidence, status; `Decision.trace_id` is filled, so `/claims` and the UI get it;
+   - **tracing off = the exact old calls** (`run(claim, vision)` without wrappers).
+4. `tests/conftest.py` (new): before **every** test, removes the Langfuse env vars, sets `CLAIMSPILOT_TRACING=0` and drops the cached client. This was needed: `mlops/tracking.py` loads `.env` into the environment during some tests, and one pytest run did turn tracing on with your real keys (see "Things to know").
+5. `tests/test_tracing.py` (new, 9 tests, fake client): off without keys, kill switch, no `trace_id` when off, the full tree (root + 4 steps + retrievals + generation under `policy`), token usage, `WARNING` on a template fallback, a broken Langfuse never breaks a claim, errors inside a step are re-raised.
+6. `requirements-tracing.txt` (new), `Dockerfile` (own layer in `full`), `docker-compose.yml` (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` passed to `api`; empty = no tracing), `.env.example` (the 3 names, empty), `README.md` (section "Tracing (Langfuse)").
+
+### Wiem's LangGraph agent: no change to her files
+
+`agents.decision.agent.run()` takes no `config`, so a callback cannot be passed in the call. LangChain has a documented hook, `langchain_core.tracers.context.register_configure_hook(context_var, inheritable=True)`: every LangChain / LangGraph run adds the handler found in that context variable. `api/tracing.langchain_callbacks()` puts a Langfuse `CallbackHandler` in it only around `make_decision()`. I checked locally with a recording callback: the handler sees `LangGraph`, `vision`, `nlp`, `policy`, `decide`, and nothing after the block. **`agents/decision/` was not edited.**
+
+### Check on the running Docker stack
+
+| Claim | Result | trace id |
+|---|---|---|
+| `TRACE-CHECK-1` (first after the api restart) | all real, decision `langgraph`, approve; **policy = template**: the LLM call timed out at 150 s while Ollama reloaded qwen2.5:7b (cold) — recorded as a `WARNING` in the trace | `ab9412a9d5f2dad61d21bf00e367146b` |
+| `TRACE-CHECK-2` (warm) | all real, decision `langgraph`, approve 0.887, policy `+qwen2.5:7b`, 23 s | **`6dc53e1fee90899006ca6465b8cd9e78`** |
+
+Read back with `langfuse.api.observations.get_many(trace_id=…)`: 13 observations, trace name `TRACE-CHECK-2`, tag `claimspilot`.
+
+```
+claim (output: approve 0.8869 langgraph)                    23.3 s
+├── vision                                                   1.5 s
+├── nlp                                                      0.0 s
+├── policy                                                  21.8 s
+│   ├── policy retrieval (retriever)                         6.2 s   (first query loads the embedding model)
+│   ├── policy retrieval (retriever)                         0.1 s
+│   └── policy LLM call (generation, qwen2.5:7b)            15.4 s   usage 1056 in / 57 out / 1113 total
+└── decision (output: decision + "langgraph")                0.0 s
+    └── LangGraph → vision, nlp, policy, decide             (Wiem's nodes)
+```
+
+`ruff check .`: clean. `pytest`: **214 passed** (no Langfuse call).
+
+### Things to know
+
+- **One pytest run sent test traces to your Langfuse project** before `tests/conftest.py` existed. In that run tracing turned on with your real keys, loaded from `.env` by an earlier test. Those traces have test claim ids (`E2E-1`, `C-001`…), and you can delete them in the Langfuse UI. Since the conftest exists, tests send nothing.
+- **I printed your Langfuse public key once** (`pk-lf-…`) by mistake, inside an SDK metadata field while reading the trace name back. The secret key was never printed. A public key is not a secret in Langfuse, but you asked for no keys in the output.
+- The first `decision` observation after a restart took 24.8 s, while LangGraph itself took 0.01 s: it is the first-time import and graph build. Later claims: 0.007 s.
+
+### Concepts
+
+- **Trace / observation / generation**: a trace is one request (one claim). Observations are its steps, nested like a call tree. A generation is an observation for an LLM call, with model, prompt, answer and token usage.
+- **Context propagation**: the SDK keeps the "current" observation in a context variable (OpenTelemetry), so an observation opened inside another becomes its child automatically. The LangChain hook uses the same idea.
+- **Fail-open tracing**: monitoring must never stop the product. Every Langfuse call is wrapped, and the pipeline does not wait for the network.
+
+### How to check
+
+```
+python -m pytest tests/test_tracing.py -q
+# with the stack running and keys in .env: send a claim, then open the trace
+# whose id is in the response (decision.trace_id) in the Langfuse UI
+```
+
+### Open questions for Mohamed
+
+1. **Cold start vs `timeout_seconds: 150`.** After a restart, or after 5 min idle (Ollama's default keep-alive), the first LLM call can pass 150 s on CPU and falls back to the template (trace 1). Options (not done, you said to ask before changing the timeout): a higher timeout; `OLLAMA_KEEP_ALIVE` (e.g. `24h`) on the ollama service so the model stays loaded (uses ~5 GB RAM all the time); or a warm-up call when the API starts.
+2. **`LANGFUSE_HOST` vs `LANGFUSE_BASE_URL`**: I documented `LANGFUSE_BASE_URL` (the SDK's current name, and what your `.env` uses). OK?
+
+---
+
+## Entry 12 — Task 4: options for the user-facing app (proposal, not committed)
+
+**Date:** 2026-11-20 · **File:** `docs/proposals/app-options.md`, **left uncommitted on purpose** (untracked file on your disk, you decide with the team) · no code change
+
+**What it is:** a comparison of 4 options for the final app: (a) improve the existing Streamlit UI, (b) a web app (React or plain HTML/JS) calling the FastAPI, (c) a PWA, (d) a native or Flutter mobile app. For each: what the user sees, effort in days (rough estimates), API changes, Docker impact, demo risk, owner, pros and cons. No recommendation.
+
+**Facts from the code that drive the comparison:**
+- the API has no CORS, no authentication and **no photo upload**: `photo_paths` are paths on the API's disk, and the Streamlit page works only through the shared `data/uploads` folder. Options (b), (c) and (d) need an upload endpoint first (`api/`, Mohamed);
+- the cited clauses (`PolicyResult.clauses`) are only returned by `/claims/analyze`, and the Streamlit page calls `/claims`, so it does not show them today;
+- a warm claim takes 16–23 s; a cold start can take minutes, so every UI needs a clear waiting state or an asynchronous flow.
+
+**Open questions (also at the end of the proposal):** demo on a laptop browser only, or on a phone? Who is the demo user: the customer or the claims handler? If not (a), the upload endpoint and CORS must be planned at the start of sprint 4.
+
+---
+
+## Entry 13 — Fix: LLM warm start, keep-alive, test photos in Docker
+
+**Date:** 2026-11-20 · **Branch:** `fix/llm-warm-start` (stacked on `feat/langfuse-tracing`) · **Commits:** `6f43c7f`, `e0ce686`, this entry
+**Goal (your answers to entry 10 q2–q3 and entry 11 q1):**
+- warm the policy LLM when the API starts (non-blocking, failure only logged);
+- `OLLAMA_KEEP_ALIVE=24h`;
+- mount the dataset test photos read-only in `api` and `ui`.
+
+No timeout was changed.
+
+### Files, in order
+
+1. `api/warmup.py` (new):
+   - `warm_policy_llm()` makes one short call ("Réponds seulement : OK.") with the policy agent's generator. It never raises; a failure is logged as a WARNING;
+   - `start_warmup()` runs it in a daemon thread. `CLAIMSPILOT_WARMUP=0` turns it off.
+2. `api/main.py`: a FastAPI `lifespan` calls `warmup.start_warmup()` at startup. The API does not wait for it.
+3. `tests/conftest.py`: also sets `CLAIMSPILOT_WARMUP=0` for every test. `tests/test_warmup.py` (new, 5 tests): one call, failure only logged, switch off, background daemon thread, startup launches it.
+4. `docker-compose.yml`:
+   - `ollama`: `OLLAMA_KEEP_ALIVE: 24h`;
+   - `api` and `ui`: `./data/vision/car_dent_scratch_split/test/images` mounted read-only at `/app/data/vision/car_dent_scratch_split/test/images`. It must be the same path in both, because the UI sends the photo's absolute path to the API.
+
+### Check on the Docker stack (rebuilt, all 3 containers recreated)
+
+| Check | Result |
+|---|---|
+| API startup | healthy after **6 s**: the warm-up does not block |
+| `ollama /api/ps` with no claim sent | `qwen2.5:7b` loaded **30 s** after start, `expires_at` = 24 h later |
+| Test photos | 366 jpg visible in `api` and `ui`, read-only; the UI's sample list sees 366 photos |
+| First claim after the restart (`WARM-CHECK-1`, dataset photo path as the UI sends it) | **69.5 s**, all agents real, decision `langgraph`, policy `+qwen2.5:7b` (LLM, not the template), approve, trace `a6a5af1e691916dc56b3107e7ff7d50c`. Before the fix: 188 s and a template fallback (entry 11). The remaining time is YOLO and the embedding model loading in the API, not the LLM |
+| `ruff` / `pytest` | clean / **219 passed** |
+
+### Concepts
+
+- **Warm-up**: pay the model-loading cost when the service starts, not on the first user's request.
+- **Keep-alive**: Ollama unloads an idle model after 5 min by default. 24 h keeps it in memory (~5 GB) all day.
+
+### Note
+
+If the first claim must also be fast for vision and retrieval, the same warm-up could load YOLO and the embedding model. Not done: you asked for the LLM only.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**

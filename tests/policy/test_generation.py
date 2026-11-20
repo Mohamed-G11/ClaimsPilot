@@ -36,6 +36,7 @@ def fake_ollama(monkeypatch):
             answer = {"capabilities": fake["capabilities"]}
         else:
             fake["sent"] = json.loads(request.data.decode("utf-8"))
+            fake["url"] = request.full_url
             answer = {"response": fake["response"], "done_reason": fake["done_reason"]}
         return io.BytesIO(json.dumps(answer).encode("utf-8"))
 
@@ -104,3 +105,15 @@ def test_model_option_overrides_the_config_for_the_run(monkeypatch, tmp_path):
     assert seen == {"model": "qwen2.5:7b", "max_tokens": 1024}
     report = json.loads((tmp_path / "eval_results.json").read_text(encoding="utf-8"))
     assert report["generator"] == "qwen2.5:7b"
+
+
+def test_ollama_host_env_overrides_the_config_host(fake_ollama, monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://ollama:11434")
+    generation.ollama_generate("Bonjour")
+    assert fake_ollama["url"] == "http://ollama:11434/api/generate"
+
+
+def test_without_ollama_host_the_config_host_is_used(fake_ollama, monkeypatch):
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    generation.ollama_generate("Bonjour")
+    assert fake_ollama["url"] == f"{CONFIG['llm']['host'].rstrip('/')}/api/generate"
