@@ -14,6 +14,10 @@ CSV columns (one claim per row, written by a human — see docs/test-sets/e2e/RE
     expected_decision  approve, reject or human_review — EMPTY = run but not scored
     written_by         who wrote the claim and its expected decision
 
+Before the first claim, the script waits until GET /ready answers 200 (all the
+API's warm-ups finished), so the first claim does not queue behind the model
+loading (--ready-timeout, default 600 s). An API without /ready: /health only.
+
 For each claim: decision, confidence, decision status string (agents["decision"]),
 each agent's status, seconds, Langfuse trace id, and whether it matches
 expected_decision. Results go to a JSON file and to MLflow (experiment
@@ -37,6 +41,7 @@ DECISIONS = ("approve", "reject", "human_review")
 EXPERIMENT = "claimspilot-decision"
 DEFAULT_OUTPUT = tracking.REPO_ROOT / "data/e2e/e2e_results.json"
 TIMEOUT_SECONDS = 600            # the first claim after a cold start can take minutes
+READY_POLL_SECONDS = 5
 
 
 def load_claims(path: Path) -> list[dict]:
@@ -114,6 +119,31 @@ def metrics(rows: list[dict]) -> dict:
     return result
 
 
+def wait_until_ready(client: httpx.Client, timeout: float) -> dict:
+    """Poll GET /ready until 200. Returns its JSON ({} for an API without /ready).
+
+    Raises SystemExit when the API is down or not ready within `timeout` seconds.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            response = client.get("/ready", timeout=10)
+        except httpx.HTTPError as error:
+            raise SystemExit(f"The API is not reachable: {error}") from error
+        if response.status_code == 200:
+            body = response.json()
+            if body.get("failed"):
+                print(f"API ready, but these warm-ups failed: {body['failed']}")
+            return body
+        if response.status_code == 404:                     # older API: no /ready
+            client.get("/health", timeout=10).raise_for_status()
+            return {}
+        if time.monotonic() >= deadline:
+            raise SystemExit(f"The API was not ready after {timeout:.0f} s: {response.text}")
+        print(f"Waiting for the API warm-up: {response.json().get('warmup')}")
+        time.sleep(READY_POLL_SECONDS)
+
+
 def evaluate(claims: list[dict], client: httpx.Client) -> dict:
     rows = [run_claim(client, row) for row in claims]
     return {"metrics": metrics(rows), "rows": rows}
@@ -140,15 +170,17 @@ def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = 
     parser.add_argument("--claims", required=True, type=Path, help="CSV of demo claims")
     parser.add_argument("--api-url", default="http://localhost:8000")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="results JSON")
+    parser.add_argument("--ready-timeout", type=float, default=600,
+                        help="seconds to wait for GET /ready before giving up")
     parser.add_argument("--no-mlflow", action="store_true", help="do not log to MLflow")
     args = parser.parse_args(argv)
 
     claims = load_claims(args.claims)
     with httpx.Client(base_url=args.api_url, transport=transport) as client:
         try:
-            client.get("/health", timeout=10).raise_for_status()
-        except httpx.HTTPError as error:
-            raise SystemExit(f"The API is not reachable at {args.api_url}: {error}") from error
+            wait_until_ready(client, args.ready_timeout)
+        except SystemExit as error:
+            raise SystemExit(f"{args.api_url}: {error}") from error
         report = evaluate(claims, client)
     report |= {"api_url": args.api_url, "claims_file": str(args.claims),
                "claims_md5": hashlib.md5(args.claims.read_bytes()).hexdigest()}

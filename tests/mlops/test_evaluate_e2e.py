@@ -15,13 +15,20 @@ def write_csv(tmp_path, rows: str):
     return path
 
 
-def fake_api(decisions: dict, fail: set = frozenset()):
-    """/health ok; /claims/analyze answers decisions[claim_id] (500 for ids in `fail`)."""
+def fake_api(decisions: dict, fail: set = frozenset(), not_ready: int = 0):
+    """/health ok; /ready 503 `not_ready` times then 200; /claims/analyze answers
+    decisions[claim_id] (500 for ids in `fail`)."""
     sent = []
+    ready_calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
             return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/ready":
+            ready_calls.append(1)
+            if len(ready_calls) <= not_ready:
+                return httpx.Response(503, json={"ready": False, "warmup": {"llm": "running"}})
+            return httpx.Response(200, json={"ready": True, "warmup": {}, "failed": []})
         claim = json.loads(request.content)
         sent.append(claim)
         if claim["claim_id"] in fail:
@@ -92,3 +99,38 @@ def test_api_down_stops_with_a_clear_message(tmp_path):
     with pytest.raises(SystemExit, match="not reachable"):
         evaluate_e2e.main(["--claims", str(write_csv(tmp_path, ROWS)), "--no-mlflow"],
                           transport=httpx.MockTransport(down))
+
+
+def test_waits_for_ready_before_the_first_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate_e2e.time, "sleep", lambda seconds: None)
+    transport, sent = fake_api({"D1": "approve", "D2": "reject", "D3": "approve"}, not_ready=2)
+    report = evaluate_e2e.main(["--claims", str(write_csv(tmp_path, ROWS)), "--output",
+                                str(tmp_path / "r.json"), "--no-mlflow"], transport=transport)
+    assert report["metrics"]["n_claims"] == 3 and len(sent) == 3
+
+
+def test_not_ready_in_time_stops_without_sending_claims(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate_e2e.time, "sleep", lambda seconds: None)
+    transport, sent = fake_api({}, not_ready=10**6)
+    with pytest.raises(SystemExit, match="not ready after 0 s"):
+        evaluate_e2e.main(["--claims", str(write_csv(tmp_path, ROWS)), "--ready-timeout", "0",
+                           "--no-mlflow"], transport=transport)
+    assert sent == []
+
+
+def test_api_without_ready_endpoint_falls_back_to_health(tmp_path):
+    def handler(request):
+        if request.url.path == "/ready":
+            return httpx.Response(404, json={"detail": "Not Found"})
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        claim = json.loads(request.content)
+        return httpx.Response(200, json={
+            "decision": {"claim_id": claim["claim_id"], "decision": "approve", "confidence": 0.9,
+                         "reasons": [], "trace_id": None},
+            "agents": {"decision": "langgraph"}})
+
+    report = evaluate_e2e.main(["--claims", str(write_csv(tmp_path, ROWS)), "--output",
+                                str(tmp_path / "r.json"), "--no-mlflow"],
+                               transport=httpx.MockTransport(handler))
+    assert report["metrics"]["n_claims"] == 3
