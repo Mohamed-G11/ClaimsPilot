@@ -157,12 +157,28 @@ def test_explain_rule_gives_the_rule_verdict_and_asks_only_to_explain():
     assert "« Décision : COUVERT »" in covered
 
 
-def test_explain_rule_asks_for_two_short_sentences_with_the_real_reason():
+def test_explain_rule_gives_the_rules_reason_to_rephrase():
     prompt = generation.build_prompt(**PROMPT_ARGS, covered=False, variant="explain_rule")
-    assert "2 phrases courtes (50 mots au maximum en tout)" in prompt
-    assert "Donne la vraie raison : la garantie concernée et si la formule du contrat" in prompt
+    assert ("Raison donnée par les règles : pour le sinistre déclaré (collision / accident), "
+            "il faut une de ces garanties : collision, tous risques ; la formule TIERS "
+            "n'en inclut aucune.") in prompt
+    assert "les dommages au véhicule de l'assuré ne sont pas couverts" in prompt
+    assert "reformule cette raison en 2 phrases courtes (50 mots au maximum en tout)" in prompt
+    assert "N'ajoute pas d'autre raison" in prompt
     assert "en 2 ou 3 phrases" not in prompt                        # no conflicting length
-    assert "Cite les identifiants des clauses" in prompt
+
+
+def test_rule_reason_for_a_covered_claim_names_the_included_guarantee():
+    reason = generation.rule_reason(True, "TR", ["rc", "collision", "vol"], "vol", ["vol"])
+    assert reason == "la formule TR inclut la garantie « vol », qui couvre le sinistre déclaré (vol)."
+    no_cause = generation.rule_reason(True, "TR", ["collision"], None, ["collision"])
+    assert "les dommages visibles sur les photos" in no_cause
+
+
+def test_rule_reason_for_tr_not_covered_has_no_third_party_sentence():
+    reason = generation.rule_reason(False, "TR", ["rc", "collision"], "catastrophe_naturelle",
+                                    ["catastrophe_naturelle"])
+    assert "n'en inclut aucune" in reason and "responsabilité civile" not in reason
 
 
 def test_explain_rule_without_a_verdict_is_an_error():
