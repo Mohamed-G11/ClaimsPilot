@@ -1381,6 +1381,286 @@ For comparison, 7b on E03: current = contradiction (COUVERT), explain_rule = ver
 
 ---
 
+## Entry 20 — Default prompt `explain_rule` + optional NVIDIA GPU for Ollama
+
+**Date:** 2026-11-20
+- `feat/policy-small-model`: commit `edf1f74` (default prompt variant).
+- `feat/ollama-gpu` (from `feat/policy-small-model`): `docker-compose.gpu.yml`, README, this entry.
+
+**Mohamed's decisions (Nov 20):** stay on qwen2.5:7b (no 3b), no `DANLAM` fix, **default prompt variant = `explain_rule`**, a human check of the explanations (Mohamed asks the teammates).
+
+### 1. Default prompt variant
+
+- `agents/policy/config.yaml`: `llm.prompt_variant: explain_rule`, with a comment saying why and what it costs: the contradiction check only catches a model that ignores the instruction (entry 14).
+- `tests/policy/test_generation.py`: the test named "current is the default" was renamed `test_current_variant_is_unchanged` (it sets `current` itself, so it never depended on the default). New test: `test_explain_rule_is_the_configured_default` reads `config.yaml`. No other test assumed the default. **237 passed**, ruff clean.
+- **Docker:** the config is copied into the `api` image, and the running image was built before this commit, so it still uses `current` (checked inside the container). `explain_rule` reaches Docker at the next `docker compose build api`. I did not rebuild, so the GPU test below uses the same prompt as the CPU test.
+
+### 2. `docker-compose.gpu.yml` (new)
+
+An override for the `ollama` service only: `deploy.resources.reservations.devices` = `driver: nvidia`, `count: all`, `capabilities: [gpu]`. The main `docker-compose.yml` is unchanged and CPU-only (checked: no `nvidia` in its config). Usage: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`. Nothing was installed on Windows: Docker Desktop's WSL 2 backend already passes the GPU.
+
+### 3. The container sees the GPU
+
+- Host: `nvidia-smi` → NVIDIA GeForce RTX 3050 Laptop GPU, driver 610.91, 4,096 MiB.
+- Ollama log: `inference compute … library=CUDA compute=8.6 … description="NVIDIA GeForce RTX 3050 Laptop GPU" … total="4.0 GiB" available="3.2 GiB"`.
+- After loading qwen2.5:7b (with the API's own `warm_policy_llm()`; only `ollama` was recreated, so the start-up warm-up did not run again): `ollama ps` → **`55%/45% CPU/GPU`**, 5.2 GB, context 4096. Log: `offloaded 12/29 layers to GPU`, 2,206 MiB on the GPU. GPU memory used: 2.9 of 4 GB. qwen2.5:7b does not fit in 4 GB, so 17 layers stay on the CPU. The first load took 125 s.
+
+### 4. Two new claims (texts never sent before), Docker, no MLflow
+
+| Claim | Text, photo | Seconds per claim | LLM call | Prompt reading (Ollama log) | Answer writing (Ollama log) |
+|---|---|---|---|---|---|
+| GPU-1 | SANLAM-TR, FR, "…le feu arrière gauche est fissuré", taillight photo (taillight crack 0.72) | 73.4 s | 32.7 s | 1,092 tok in 3.2 s = **345 tok/s** | 86 tok in 29.1 s = **2.92 tok/s** |
+| GPU-2 | AXA-TR, EN, "A van reversed into my car… front bumper", front-bumper photo (dent 0.86) | **20.5 s** | 19.8 s | 946 tok in 2.9 s = **331 tok/s** | 87 tok in 16.5 s = **5.22 tok/s** |
+
+Both claims: all agents real, decision status `langgraph`, LLM answer (`+qwen2.5:7b`), approve. Traces `f96974975f08874fb9e124c9a62dd526`, `b178f922aea4eb1ca2badd90d4108cd3`.
+
+GPU-1 lost **~35 s outside the LLM**: retrieval 28.5 s and vision 6.7 s (normally ~0.1–1.5 s). The `api` container had been idle for 30 min, so its libraries were cold. That is not related to the GPU. GPU-2 is the clean measurement.
+
+### Comparison with the CPU numbers (entry 13 follow-up, same prompt variant `current`, prompts never seen before)
+
+| | CPU only (Docker) | GPU 45 % (Docker) |
+|---|---|---|
+| Seconds per claim | 80.7 s (SPEED-1), 100.9 s (SPEED-2) | 73.4 s (GPU-1, ~35 s cold libraries), **20.5 s** (GPU-2) |
+| LLM call | 61.3 s (57 output tok), 100.6 s (210 output tok) | 32.7 s (86 output tok), 19.8 s (87 output tok) |
+| Prompt reading | about 20–25 tok/s (estimated: ~40–50 s for ~1,100 tokens) | **331–345 tok/s** (~3 s), about **15× faster** |
+| Answer writing | 3.3–4.05 tok/s | 2.9–5.2 tok/s: **about the same** |
+
+**Reading:** the GPU removes the prompt-reading cost (~45 s → ~3 s). Answer writing stays slow, because 17 of 29 layers still run on the CPU for every output token. A claim now costs roughly 5–10 s (agents) + 3 s (prompt) + output tokens / 3–5 tok/s. `explain_rule` answers are short, which should help further once the image is rebuilt.
+
+### Concepts
+
+- **Layer offloading:** a model that does not fit in VRAM is split. Some layers run on the GPU, the rest on the CPU, and each token passes through both, so the CPU part sets the pace of generation.
+- **Prompt vs generation:** reading the prompt processes many tokens in parallel (the GPU is very good at that); writing produces one token at a time (bound by memory speed and the CPU layers).
+
+### Open questions for Mohamed
+
+1. **Rebuild the `api` image** (`docker compose build api`, then up with the GPU override) so the Docker stack uses `explain_rule`? Not done, so the CPU/GPU comparison stayed fair.
+2. **Warm vision and retrieval at API start too?** GPU-1 lost ~35 s in cold YOLO / embedding code after the API was idle. Same idea as the LLM warm-up (entry 13 note).
+3. **qwen2.5:7b with only 45 % on the GPU:** acceptable, or try a smaller context (`num_ctx`) to fit a few more layers in 4 GB? (No model change, as decided.)
+
+---
+
+## Entry 21 — Warm all agents at start-up, `num_ctx` test (not kept), truncation check, final GPU timings
+
+**Date:** 2026-11-20 · **Branch:** `feat/ollama-gpu` · **Commits:** `fc371d0`, `991dfbf`, this entry
+**Mohamed's answers to entry 20:** 1) rebuild the API image so Docker uses `explain_rule`; 2) warm vision and retrieval at start-up, same pattern as the LLM; 3) try a smaller context window, keep it only if claims clearly get faster **and** no prompt can be truncated, with a check on `prompt_eval_count`.
+
+### 1. Warm-ups (`api/warmup.py`, `fc371d0`)
+
+Two daemon threads start with the API: one warms the LLM (as before); the other runs, in order:
+- `warm_vision()`: the public `agents.vision.agent.run()` on a blank 640×640 image (loads YOLO + one inference);
+- `warm_retrieval()`: `agents.policy.agent.retrieve()` with a dummy query (embedding model + Chroma + one query);
+- `warm_decision()`: Wiem's `agents.decision.agent.run()` with her stubs (first LangGraph import and graph build; it cost 24.8 s in entry 11). Not asked explicitly; same pattern, no change to her files.
+
+Each step that fails is logged as a WARNING and never stops the API; `CLAIMSPILOT_WARMUP=0` turns all of it off (tests).
+
+Real check on the host venv: vision **4.1 s**, retrieval **12.5 s**, decision **0.9 s**, all OK. In Docker, the first claim then had vision 0.2 s, retrieval 0.1–0.2 s, decision 0.0 s (it was 6.7 s and 28.5 s in entry 20).
+
+Tests (`tests/test_warmup.py`, 7): two background threads, all off with the switch, each agent step logs its failure and returns False when the libraries are missing, the public entry points are called.
+
+### 2. Smaller context window: tested, **not kept**
+
+- **Longest prompt** over the 30 eval claims with `explain_rule`: measured exactly with Ollama (`prompt_eval_count`, 18 prompts) = **1,145 tokens** (shortest 604). Plus `max_tokens` 1,024 = **2,169**. So the smallest safe window is about 2,560 (today: Ollama's default for this GPU, 4,096).
+- **A/B on the same prompt** (E25, explain_rule, reload before each, same 144-token answer):
+
+| num_ctx | KV cache | layers on GPU | prompt | output | total |
+|---|---|---|---|---|---|
+| 2,560 | 140 MiB | 12 / 29 | 336 tok/s | 4.98 tok/s | 102.1 s |
+| 4,096 | 224 MiB | 12 / 29 | 407 tok/s | 4.77 tok/s | 96.9 s |
+
+The smaller window frees only 84 MiB of VRAM: not enough for one more 7b layer, so the CPU/GPU split stays 55 %/45 % and generation gains about 4 %. **Condition (a) cannot be met**, so `num_ctx` was not added to the config and no claim was run for it. `config.yaml` has no `num_ctx`.
+
+### 3. Truncation check (`agents/policy/generation.py`, `991dfbf`), kept
+
+Ollama silently drops the start of a prompt longer than `num_ctx`, and the answer is then written without the claim or the clauses. Measured on the 18 prompts: one token = **3.23 to 3.55 characters**. `warn_if_prompt_truncated()` logs a WARNING when `prompt_eval_count < len(prompt) / 4.5`, i.e. when Ollama read clearly fewer tokens than the prompt can have. The answer is still used (it is a warning, as asked). Kept although `num_ctx` was not changed: a very long claim text could also pass the 4,096 default. Tests: full prompt (no warning), too few tokens (warning), unknown count, and through `ollama_generate`. **243 passed**, ruff clean.
+
+### 4. Rebuild + final timings with the GPU override
+
+`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build --force-recreate`: all 3 containers recreated, `prompt_variant` in the api image = **`explain_rule`** (checked), `ollama ps` = `55%/45% CPU/GPU`. No warm-up failure in the logs.
+
+| Claim (texts never sent before) | Seconds per claim | LLM call | Ollama prompt | Ollama output | Decision |
+|---|---|---|---|---|---|
+| FINAL-1, first claim after the restart (AXA-TR, FR, cyclist, taillight photo) | **62.9 s** | 62.1 s (of which ~34 s waiting for the warm-up's model load) | 1,062 tok, 413 tok/s | 126 tok, 5.32 tok/s | human_review (NLP `uncertain`: text names rear bumper + taillight, photo shows taillight) |
+| FINAL-2, warm (SANLAM-TR, EN, low wall, front bumper photo) | **29.2 s** | 28.9 s | 996 tok, 532 tok/s | 148 tok, 5.46 tok/s | approve |
+
+Traces `d9cb2a9a30e321ac766c7d936f553b2c`, `e97a70178cc1c426a603d082a0af99d7`.
+
+**Why the first claim waited:**
+- The warm-up's own request ran from 10:43:11 to 10:45:11: loading qwen2.5:7b with the GPU takes **about 2 min** from disk.
+- Ollama already lists the model in `/api/ps` while it is still loading, so the first claim, sent 63 s after the API was healthy, queued behind the load (Ollama serves one request at a time).
+- A claim sent once the load is over takes about the warm time.
+
+**Compared with earlier:**
+
+| | CPU only | GPU 45 %, before (entry 20) | GPU 45 % + all warm-ups + explain_rule |
+|---|---|---|---|
+| First claim after restart | 69.5 s (entry 13, prompt seen before) | 73.4 s (35 s cold agents) | 62.9 s (34 s waiting for the model load) |
+| Warm claim, new prompt | 80.7 / 100.9 s | 20.5 s | 29.2 s |
+
+The warm claim is slower than GPU-2 (20.5 s) because the answer is longer: `explain_rule` answers here have 126–148 tokens vs 86–87 with `current` in entry 20, and writing stays at ~5 tok/s. Time is now almost all answer writing: about 0.2 s per output token.
+
+### Concepts
+
+- **mmap load:** Ollama maps the 4.7 GB model file into memory and copies 12 layers to the GPU; on this laptop that takes about 2 minutes after a container restart.
+- **Single request queue:** with `OLLAMA_NUM_PARALLEL=1`, a request that arrives during another one (here the warm-up) waits for it.
+
+### Open questions for Mohamed
+
+1. **Report warm-up status in `/health`** (e.g. `{"status": "ok", "warm": false}` until the 4 warm-ups end), so the UI and the e2e script can wait for it instead of hitting the 2-min model load? Not done (API change).
+2. **Shorter answers:** `explain_rule` answers are 126–148 tokens (~25 s at 5 tok/s). Lower `max_tokens` (it would need the reasoning-model guard to stay correct) or ask for "2 phrases" more strictly? Not changed.
+
+---
+
+## Entry 22 — `/ready` and warm-up status; shorter `explain_rule` answers (kept)
+
+**Date:** 2026-11-20 · **Branch:** `feat/ollama-gpu` · **Commits:** `5b6c259`, `2dcfc1b`, `15efec1`, this entry
+**Mohamed's answers to entry 21:** 1) warm-up status in `/health` (always 200) + a `/ready` endpoint (503 until the warm-ups end), the e2e script waits on it, no edit to Wiem's UI (write what she would need); 2) try shorter `explain_rule` answers once, keep them only if they still give the real reason.
+
+### 1. Warm-up status, `/health`, `/ready` (`5b6c259`, `2dcfc1b`)
+
+- `api/warmup.py`: each step (`llm`, `vision`, `retrieval`, `decision`) has a state: `pending` → `running` → `done` or `failed`; `off` when `CLAIMSPILOT_WARMUP=0`. `status()` returns a copy (thread lock), and `is_ready()` is true when every step has **finished** (done, failed or off).
+- `GET /health`: **always 200** (Docker healthcheck, CI smoke test, UI unchanged), body `{"status": "ok", "warmup": {...}}`.
+- `GET /ready`: **503** while a step is pending or running, **200** after. Body `{"ready": …, "warmup": {...}, "failed": [...]}`.
+- **My interpretation, to confirm (question 1):** a step that *failed* counts as finished, so `/ready` becomes 200 and lists it in `failed`. If `/ready` waited for success, an API with Ollama down (or the CI light image without YOLO / Chroma) would never be ready, and the e2e script would wait until its timeout.
+- `mlops/evaluate_e2e.py`: before the first claim, polls `/ready` every 5 s (`--ready-timeout`, default 600 s), prints the warm-up states while waiting and any failed step. An API without `/ready` (404, older image) falls back to `/health`.
+- Tests: `/health` 200 while warming, `/ready` 503 → 200, failed step listed, states running → done/failed, off = ready (`tests/test_warmup.py`, `tests/test_health.py`); e2e waits for ready, gives up after the timeout without sending claims, falls back on 404 (`tests/mlops/test_evaluate_e2e.py`).
+
+**Live check** (all 3 containers recreated with the GPU override):
+
+```
+  0 s  /ready 503  llm running, vision running, retrieval pending, decision pending
+  2 s  /ready 503  llm running, vision done,    retrieval running, decision pending
+ 10 s  /ready 503  llm running, vision done,    retrieval done,    decision done
+133 s  /ready 200  all done
+```
+
+`/health` stayed 200 throughout. **First claim sent after `/ready` = 200 (READY-1, new text): 28.9 s**, the same as a warm claim: the 2-min model load no longer hits the first user.
+
+### What Wiem would need to change in `ui/app.py` to show "warming up" (not done: her file)
+
+1. Next to `api_is_up()` (which calls `/health`), add a call to `GET {API_URL}/ready`: 200 → ready; 503 → read `warmup` from the JSON; 404 → older API, treat as ready.
+2. When `/ready` is 503: show `st.info("The models are warming up (about 2 minutes after a restart)…")` with the state of each step (`llm`, `vision`, `retrieval`, `decision`), and disable the submit button (`st.form_submit_button(..., disabled=True)`).
+3. Refresh the status by itself: e.g. a "Check again" button, or `time.sleep(5)` then `st.rerun()` while not ready.
+4. If `failed` is not empty: show a warning ("the first claim may be slow") but allow submitting.
+5. Optional: her `httpx.post(..., timeout=120)` can stay; after `/ready` a claim takes about 15–30 s.
+
+### 2. Shorter `explain_rule` answers (`15efec1`), kept
+
+Prompt change, **`explain_rule` only** (`current` checked identical to the original code: 18 / 18 prompts):
+- the shared "en 2 ou 3 phrases" is removed for this variant;
+- new lines: "…puis écris 2 phrases courtes (50 mots au maximum en tout)." and "Donne la vraie raison : la garantie concernée et si la formule du contrat l'inclut. Ne change pas la décision."
+- The clause-citation line is unchanged. New test: `test_explain_rule_asks_for_two_short_sentences_with_the_real_reason`.
+
+Evaluation: 30 claims, qwen2.5:7b, `--max-tokens 1024`, GPU Docker Ollama, MLflow run **`ab6537ba477c4aaf84397b9843897508`**.
+
+| | explain_rule before (`ca98f6e62c944b08b5a8bd89b16852af`) | explain_rule short (`ab6537ba477c4aaf84397b9843897508`) |
+|---|---|---|
+| coverage_accuracy | 96.7 % | 96.7 % |
+| contradictions | 0 | 0 |
+| format OK | 100 % | 100 % |
+| invented citations | 0 % | 0 % |
+| cites a retrieved clause | 72.2 % | 88.9 % |
+| answers citing a correct clause (all claims) | 52 % | 64 % |
+| words per answer, mean / max | 54 / 93 | **28 / 38** |
+| seconds per answer, mean / median / max | 54.2 / 53.3 / 78.3 (CPU Docker) | **12.2 / 11.6 / 17.8** (GPU Docker) |
+
+⚠ Seconds: the old run had no GPU (entry 14), so the two columns differ by more than the prompt. The fair measure is the length: **answers are half as long**, so at ~5 tokens/s the writing time is roughly halved on the same hardware.
+
+**Real reason: my reading of the 18 answers.** The real reason = the guarantee concerned and whether the formula includes it.
+
+| Group | Before | Short |
+|---|---|---|
+| 13 TR claims, covered | 7 clear (guarantee + "formule TR"), 6 partial (guarantee only) | **11 clear**, 2 partial (E02 no formula; E25 odd: headlight as "glaces latérales") |
+| 5 TIERS claims, not covered | 0 clear, 2 partial (E04, E17 mention TIERS), 3 wrong or none (E03 none, E10 "délai dépassé", E24 "pas une collision") | **1 clear (E10)**, 1 partial (E24), **3 wrong** (E03, E04, E17) |
+| Total clear | 7 / 18 | **12 / 18** |
+
+The short version gives the real reason more often, so it is **kept**. TIERS stays the weak point in both versions: the model still invents reasons instead of "TIERS does not include this guarantee". This is a reading by me, not a human label: the human check of explanations you are organising should confirm it.
+
+**Side by side** (before → short):
+
+- **E03** (AXA-TIERS, rear-end collision, rule NON COUVERT)
+  - before: "Décision : NON COUVERT [AXA-016-2, AXA-014-2]" (no explanation)
+  - short: "Décision : NON COUVERT. La garantie collision n'est pas applicable car le véhicule n'a pas été impliqué dans une collision avec un autre véhicule. Dommage tous accidents exclut également les dommages non consécutifs à une collision. [AXA-015, AXA-014-2]" (**wrong reason**: it was hit by a car)
+- **E13** (SANLAM-TR, fire, rule COUVERT)
+  - before: "Décision : COUVERT [SANLAM-045, SANLAM-071, SANLAM-044]. Selon les clauses [SANLAM-045] et [SANLAM-071], la garantie incendie du véhicule est couverte, même si aucun dommage physique n'est visible. De plus, la garantie R10 … n'est pas exclue par les clauses [SANLAM-044], et l'incendie est une cause couverte par la formule TR de votre contrat." (57 words)
+  - short: "Décision : COUVERT. La garantie incendie est incluse dans la formule TR de votre contrat [SANLAM-045]. Cependant, la clause R8 exclut l'incendie non couvert par R10 [SANLAM-044]." (27 words; real reason first, then a confusing second sentence)
+- **E10** (AXA-TIERS, theft, rule NON COUVERT)
+  - before: "Décision : NON COUVERT [AXA-019-1, AXA-020-1]. Selon les clauses du contrat, le vol du véhicule est couvert, mais le délai de déclaration de trois jours ouvrables a été dépassé. De plus, la clause d'exclusion [AXA-020-1] stipule que le vol des clefs est non couvert, ce qui est le cas ici." (wrong reason)
+  - short: "Décision : NON COUVERT. La garantie vol de véhicule n'est pas incluse dans la formule TIERS d'AXA. [AXA-019-2] et [AXA-020-1] excluent cette garantie." (**real reason**)
+- **E17** (AXA-TIERS, windshield chipped by a stone, rule NON COUVERT)
+  - before: "Décision : NON COUVERT [AXA-021, AXA-022-1, AXA-022-2]. Les dommages au pare-brise par un caillou sont couverts par la garantie bris de glace [AXA-021]. Cependant, l'exclusion … [AXA-022-1] stipule que ce type de dommage n'est pas couvert par la formule TIERS d'AXA [AXA-022-2]."
+  - short: "Décision : NON COUVERT. La garantie bris de glace est exclue par la clause [AXA-022-1] qui stipule que les dommages causés par des cailloux sont exclus." (**wrong reason**: an exclusion instead of the TIERS formula)
+
+The `api` image was rebuilt with the short prompt (`/ready` 200 after 16 s, `ollama` kept the model loaded). **252 passed**, ruff clean.
+
+### Open questions for Mohamed
+
+1. **`/ready` and failed warm-ups:** OK that a *failed* step counts as finished (200, listed in `failed`), or should `/ready` stay 503 until every step succeeds?
+2. **TIERS explanations** stay wrong in 3 / 5 answers (E03, E04, E17). Since the rules already know the reason (`needed` guarantees not in `bought`), the prompt could state it ("La formule TIERS n'inclut pas la garantie collision") so the LLM only rephrases it. Or `formula_hint` + `explain_rule` together. Not done.
+
+---
+
+## Entry 23 — `explain_rule` with the rules' reason: tried, **reverted**
+
+**Date:** 2026-11-20 · **Branch:** `feat/ollama-gpu` · **Commits:** `fe63707` (experiment), `9158dc0` (revert), this entry
+**Mohamed's answers to entry 22:**
+1. Confirmed: a failed warm-up step counts as finished for `/ready` and stays listed under `failed` (as built).
+2. Try giving the LLM the rules' own reason to rephrase. Keep it only if the TIERS answers give the real reason **and nothing else gets worse**. After this: no more prompt or performance tuning.
+
+### What was tried (`fe63707`)
+
+Only the **formula check** reaches the LLM: exclusions, incompatible photos, unknown guarantees and missing evidence all stop earlier with a fixed sentence, so the LLM never has to explain them. `rule_reason()` wrote that check's reason in French:
+- covered: "la formule TR inclut la garantie « incendie », qui couvre le sinistre déclaré (incendie)."
+- not covered: "pour le sinistre déclaré (collision / accident), il faut une de ces garanties : collision, tous risques ; la formule TIERS n'en inclut aucune. La formule TIERS ne garantit que la responsabilité civile et la défense et recours : les dommages au véhicule de l'assuré ne sont pas couverts."
+
+The `explain_rule` prompt then said "Raison donnée par les règles : …", "…reformule cette raison en 2 phrases courtes (50 mots au maximum en tout), en citant les identifiants des clauses." and "N'ajoute pas d'autre raison et ne change pas la décision." `current` was checked identical to the original (18 / 18).
+
+### Results (30 claims, qwen2.5:7b, `--max-tokens 1024`, GPU Docker Ollama)
+
+| | short (`ab6537ba477c4aaf84397b9843897508`, kept) | rules' reason (`af0010a74e494e95aef6da67d8c45183`) |
+|---|---|---|
+| coverage_accuracy | 96.7 % | 96.7 % |
+| contradictions / invented citations | 0 / 0 % | 0 / 0 % |
+| format OK | 100 % | 100 % |
+| cites a retrieved clause | 88.9 % | 94.4 % |
+| answers citing a correct clause (all claims) | 64 % | 76 % |
+| words per answer, mean / max | 28 / 38 | 24 / 39 |
+| seconds per answer, mean / median / max | 12.2 / 11.6 / 17.8 | 11.9 / 10.8 / 16.8 |
+
+**Real reason (my reading):**
+
+| Group | short | rules' reason |
+|---|---|---|
+| 5 TIERS claims | 1 clear (E10), 1 partial (E24), 3 wrong | **5 / 5 give the real reason** (E04 credits it to an exclusion clause id; E10 adds a vague extra sentence) |
+| 13 TR claims | **11 clear** ("guarantee X is included in formula TR") | **7 clear**: E01, E06, E15 lose the formula; **E05 has no sentence at all** ("Décision : COUVERT [AXA-015] Dommages collision [AXA-013] Dommage tous accidents") |
+
+**Decision rule not met:** TIERS is fixed, but the TR explanations got worse (11 → 7 clear, one answer with no explanation). The format metric did not catch E05: it only checks the decision line and the number of sentences. So the change was **reverted** (`9158dc0`). `git diff 15efec1 HEAD` on `generation.py` and its tests is empty, i.e. the code is exactly the kept short prompt of entry 22. The running `api` image was built from that code, so no rebuild was needed (checked inside the container: short prompt yes, rules' reason no). **252 passed**, ruff clean.
+
+### Side by side (short, kept → rules' reason, reverted)
+
+- **E03** (AXA-TIERS, rear-end collision)
+  - short: "Décision : NON COUVERT. La garantie collision n'est pas applicable car le véhicule n'a pas été impliqué dans une collision avec un autre véhicule. Dommage tous accidents exclut également les dommages non consécutifs à une collision. [AXA-015, AXA-014-2]" (wrong)
+  - reason: "Décision : NON COUVERT [AXA-015] et [AXA-016-2] ne sont pas applicables car la formule TIERS ne couvre pas les dommages au véhicule de l'assuré." (**real reason**)
+- **E04** (SANLAM-TIERS, crash in a parking lot, EN)
+  - short: "Décision : NON COUVERT. La garantie collision [SANLAM-023] et [SANLAM-028] ne s'applique pas aux dommages subis en dehors de la circulation, tels que dans un parking. Les clauses [SANLAM-025] et [SANLAM-015] excluent également ces dommages." (wrong)
+  - reason: "Décision : NON COUVERT [SANLAM-028] R7 Dommages collision - Exclusions prévoit que les dommages au véhicule ne sont pas couverts par la formule TIERS." (real reason, attributed to an exclusion clause)
+- **E10** (AXA-TIERS, theft)
+  - short: "Décision : NON COUVERT. La garantie vol de véhicule n'est pas incluse dans la formule TIERS d'AXA. [AXA-019-2] et [AXA-020-1] excluent cette garantie." (real reason)
+  - reason: "Décision : NON COUVERT [AXA-019-2, AXA-020-1] La formule TIERS ne couvre pas les dommages directs au véhicule volé. Les garanties de vol ne sont disponibles que si le véhicule est volé et que les conditions du contrat sont respectées." (real reason + vague sentence)
+- **E13** (SANLAM-TR, fire)
+  - short: "Décision : COUVERT. La garantie incendie est incluse dans la formule TR de votre contrat [SANLAM-045]. Cependant, la clause R8 exclut l'incendie non couvert par R10 [SANLAM-044]."
+  - reason: "Décision : COUVERT [SANLAM-045] La garantie incendie, incluse dans la formule TR, couvre le sinistre d'incendie déclaré." (cleaner)
+- **E17** (AXA-TIERS, windshield)
+  - short: "Décision : NON COUVERT. La garantie bris de glace est exclue par la clause [AXA-022-1] qui stipule que les dommages causés par des cailloux sont exclus." (wrong)
+  - reason: "Décision : NON COUVERT [AXA-021] La garantie bris de glace n'est pas incluse dans la formule TIERS [AXA-022-1]." (**real reason**)
+
+### State after this entry
+
+- Prompt in use (code and Docker image): `explain_rule` with the short instruction of entry 22.
+- As agreed: **no more prompt or performance tuning**. The TIERS weakness of the kept prompt (3 / 5 wrong reasons) is left to the human check of explanations.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**

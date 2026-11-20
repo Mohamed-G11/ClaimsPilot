@@ -1,7 +1,7 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 
 from api import warmup
 from api.pipeline import ClaimAnalysis, analyze_claim, process_claim
@@ -12,7 +12,7 @@ API_VERSION = os.getenv("CLAIMSPILOT_VERSION", "0.3.0")   # set by Docker / CI a
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    warmup.start_warmup()          # background thread: the API does not wait for it
+    warmup.start_warmup()          # background threads: the API does not wait for them
     yield
 
 
@@ -21,7 +21,23 @@ app = FastAPI(title="ClaimsPilot API", version=API_VERSION, lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Always 200 while the process runs (Docker healthcheck); shows the warm-up state."""
+    return {"status": "ok", "warmup": warmup.status()}
+
+
+@app.get("/ready")
+def ready(response: Response):
+    """200 when every warm-up has finished (done, failed or off), 503 before.
+
+    Clients (the e2e script, a UI) wait on it so the first claim does not queue
+    behind the model loading. `failed` lists the steps that did not warm up.
+    """
+    steps = warmup.status()
+    is_ready = warmup.is_ready()
+    if not is_ready:
+        response.status_code = 503
+    return {"ready": is_ready, "warmup": steps,
+            "failed": [step for step, state in steps.items() if state == "failed"]}
 
 
 @app.post("/claims", response_model=Decision)
