@@ -9,6 +9,10 @@ loading time (build log entries 10, 11, 13 and 20):
 Two background threads (the LLM in one, the agents in the other): the API starts
 and answers /health at once. Each step that fails (library or file missing, no
 Ollama...) is only logged. CLAIMSPILOT_WARMUP=0 turns everything off (tests, CI).
+
+`status()` gives the state of each step for /health and /ready:
+"pending" (not started), "running", "done", "failed" (finished with an error,
+the first claim may be slow) or "off" (warm-up turned off).
 """
 import logging
 import os
@@ -19,6 +23,34 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 PROMPT = "Réponds seulement : OK."
+STEPS = ("llm", "vision", "retrieval", "decision")
+FINISHED = {"done", "failed", "off"}
+_status = dict.fromkeys(STEPS, "pending")
+_lock = threading.Lock()
+
+
+def status() -> dict:
+    """A copy of the state of each warm-up step."""
+    with _lock:
+        return dict(_status)
+
+
+def is_ready() -> bool:
+    """True when every step has finished (done, failed or off)."""
+    return all(state in FINISHED for state in status().values())
+
+
+def _set(step: str, state: str) -> None:
+    with _lock:
+        _status[step] = state
+
+
+def _run_step(step: str, warm) -> bool:
+    """Run one warm-up and record its state. Never raises."""
+    _set(step, "running")
+    ok = warm()
+    _set(step, "done" if ok else "failed")
+    return ok
 
 
 def warm_policy_llm(generate=None) -> bool:
@@ -86,15 +118,24 @@ def warm_decision() -> bool:
 
 def warm_agents() -> dict:
     """Vision, retrieval and decision, one after the other. Never raises."""
-    return {"vision": warm_vision(), "retrieval": warm_retrieval(),
-            "decision": warm_decision()}
+    return {"vision": _run_step("vision", warm_vision),
+            "retrieval": _run_step("retrieval", warm_retrieval),
+            "decision": _run_step("decision", warm_decision)}
+
+
+def warm_llm_step() -> bool:
+    return _run_step("llm", warm_policy_llm)
 
 
 def start_warmup() -> list[threading.Thread]:
     """Start the warm-ups in daemon threads ([] when CLAIMSPILOT_WARMUP=0)."""
     if os.getenv("CLAIMSPILOT_WARMUP", "1") == "0":
+        for step in STEPS:
+            _set(step, "off")
         return []
-    threads = [threading.Thread(target=warm_policy_llm, name="policy-llm-warmup", daemon=True),
+    for step in STEPS:
+        _set(step, "pending")
+    threads = [threading.Thread(target=warm_llm_step, name="policy-llm-warmup", daemon=True),
                threading.Thread(target=warm_agents, name="agents-warmup", daemon=True)]
     for thread in threads:
         thread.start()

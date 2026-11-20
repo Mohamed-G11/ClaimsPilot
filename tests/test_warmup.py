@@ -73,5 +73,55 @@ def test_api_start_launches_the_warm_up(monkeypatch):
     started = []
     monkeypatch.setattr(warmup, "start_warmup", lambda: started.append(True))
     with TestClient(main.app) as client:            # runs the lifespan (startup)
-        assert client.get("/health").json() == {"status": "ok"}
+        assert client.get("/health").json()["status"] == "ok"
     assert started == [True]
+
+
+# --- warm-up status, /health and /ready ------------------------------------------
+
+def set_states(monkeypatch, **states):
+    for step in warmup.STEPS:
+        monkeypatch.setitem(warmup._status, step, states.get(step, "done"))
+
+
+def test_ready_is_503_while_a_warm_up_runs_and_health_stays_200(monkeypatch):
+    set_states(monkeypatch, llm="running", vision="pending")
+    client = TestClient(main.app)
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["warmup"]["llm"] == "running"
+    ready = client.get("/ready")
+    assert ready.status_code == 503 and ready.json()["ready"] is False
+
+
+def test_ready_is_200_when_every_warm_up_is_done(monkeypatch):
+    set_states(monkeypatch)
+    response = TestClient(main.app).get("/ready")
+    assert response.status_code == 200
+    assert response.json() == {"ready": True, "warmup": dict.fromkeys(warmup.STEPS, "done"),
+                               "failed": []}
+
+
+def test_a_failed_warm_up_is_finished_and_listed(monkeypatch):
+    set_states(monkeypatch, llm="failed")                  # e.g. Ollama not reachable
+    body = TestClient(main.app).get("/ready").json()
+    assert body["ready"] is True and body["failed"] == ["llm"]
+
+
+def test_steps_record_running_then_done_or_failed(monkeypatch):
+    set_states(monkeypatch, vision="pending")
+    seen = []
+
+    def warm():
+        seen.append(warmup.status()["vision"])
+        return False
+
+    assert warmup._run_step("vision", warm) is False
+    assert seen == ["running"] and warmup.status()["vision"] == "failed"
+
+
+def test_turned_off_warm_up_is_ready(monkeypatch):
+    set_states(monkeypatch, llm="pending")
+    monkeypatch.setenv("CLAIMSPILOT_WARMUP", "0")
+    warmup.start_warmup()
+    assert set(warmup.status().values()) == {"off"} and warmup.is_ready()
