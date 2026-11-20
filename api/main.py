@@ -12,7 +12,7 @@ API_VERSION = os.getenv("CLAIMSPILOT_VERSION", "0.3.0")   # set by Docker / CI a
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    warmup.start_warmup()          # background thread: the API does not wait for it
+    warmup.start_warmup()          # background threads: the API does not wait for them
     yield
 
 
