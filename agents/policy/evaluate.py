@@ -1,8 +1,7 @@
 """Evaluate the policy agent on the labelled claims of data/policy/eval_claims.csv.
 
 Usage:  python -m agents.policy.evaluate            (real index + Ollama if it answers)
-        python -m agents.policy.evaluate --model qwen2.5:7b --max-tokens 1024
-                                                    (this run only; config.yaml unchanged)
+        python -m agents.policy.evaluate --model qwen2.5:7b --max-tokens 1024             --prompt-variant explain_rule          (this run only; config.yaml unchanged)
         python -m agents.policy.evaluate --no-llm   (template answers only)
 
 Each CSV row is one claim: the text, the contract, the damages vision would have
@@ -63,8 +62,12 @@ SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
 def load_cases(path: Path = EVAL_FILE) -> list[dict]:
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
+    with Path(path).open(encoding="utf-8", newline="") as f:
+        cases = list(csv.DictReader(f))
+    examples = [c["claim_id"] for c in cases if c["claim_id"].upper().startswith("EXAMPLE")]
+    if examples:
+        raise ValueError(f"{path}: delete the EXAMPLE rows of the template: {examples}")
+    return cases
 
 
 def to_inputs(case: dict) -> tuple[ClaimInput, VisionResult]:
@@ -226,14 +229,14 @@ def metrics(rows: list[dict]) -> dict:
     return result
 
 
-def log_to_mlflow(report: dict, run_name: str) -> str | None:
+def log_to_mlflow(report: dict, run_name: str, data: list | None = None) -> str | None:
     """Log params, metrics and the detailed JSON. Returns the run id, or None if skipped."""
     if not tracking.has_credentials():
         return None
     import mlflow
 
     with tracking.start_run(EXPERIMENT, run_name=run_name, owner="mohamed", sprint=3,
-                            data=DATA) as run:
+                            data=data or DATA) as run:
         mlflow.log_params({
             "agent_version": agent.AGENT_VERSION,
             "embedding_model": CONFIG["embedding_model"],
@@ -243,9 +246,11 @@ def log_to_mlflow(report: dict, run_name: str) -> str | None:
             "llm_timeout_seconds": CONFIG["llm"]["timeout_seconds"],
             "llm_max_tokens": CONFIG["llm"]["max_tokens"],
             "llm_temperature": CONFIG["llm"]["temperature"],
+            "llm_prompt_variant": CONFIG["llm"].get("prompt_variant", "current"),
             "generator": report["generator"],
         })
-        mlflow.set_tag("llm_model", CONFIG["llm"]["model"])
+        mlflow.set_tags({"llm_model": CONFIG["llm"]["model"],
+                         "prompt_variant": CONFIG["llm"].get("prompt_variant", "current")})
         mlflow.log_metrics({k: v for k, v in report["metrics"].items() if v is not None})
         mlflow.log_dict(report, "policy_eval.json")
         return run.info.run_id
@@ -261,10 +266,15 @@ def warm_up() -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--cases", type=Path, default=EVAL_FILE,
+                        help="CSV of labelled claims (default: data/policy/eval_claims.csv), "
+                             "e.g. data/policy/independent_claims.csv")
     parser.add_argument("--model", help="Ollama model for this run (default: llm.model "
                                         "in agents/policy/config.yaml, file not changed)")
     parser.add_argument("--max-tokens", type=int,
                         help="max tokens of the LLM answer for this run (default: config)")
+    parser.add_argument("--prompt-variant", choices=generation.PROMPT_VARIANTS,
+                        help="llm.prompt_variant for this run (default: config)")
     parser.add_argument("--no-llm", action="store_true", help="template answers only")
     parser.add_argument("--no-mlflow", action="store_true", help="do not log to MLflow")
     args = parser.parse_args(argv)
@@ -274,16 +284,21 @@ def main(argv: list[str] | None = None) -> None:
         CONFIG["llm"]["model"] = args.model
     if args.max_tokens:
         CONFIG["llm"]["max_tokens"] = args.max_tokens
+    if args.prompt_variant:
+        CONFIG["llm"]["prompt_variant"] = args.prompt_variant
 
-    cases = load_cases()
+    cases = load_cases(args.cases)
     if not args.no_llm:
         warm_up()
     report = evaluate(cases, generator=generation.no_generator if args.no_llm else None)
     used_llm = report["metrics"]["llm_answers"] > 0
     report["generator"] = CONFIG["llm"]["model"] if used_llm else "template"
-    report["llm_settings"] = {k: CONFIG["llm"][k] for k in
-                              ("model", "max_tokens", "timeout_seconds", "temperature")}
-    report["tags"] = tracking.required_tags("mohamed", 3, DATA)
+    report["llm_settings"] = {k: CONFIG["llm"].get(k) for k in
+                              ("model", "max_tokens", "timeout_seconds", "temperature",
+                               "prompt_variant")}
+    data = [*DATA[:2], args.cases]                     # the claims file actually used
+    report["cases_file"] = str(args.cases)
+    report["tags"] = tracking.required_tags("mohamed", 3, data)
     report["index"] = str(data_path("chroma_dir"))
 
     for row in report["rows"]:
@@ -296,7 +311,10 @@ def main(argv: list[str] | None = None) -> None:
     run_id = None
     if not args.no_mlflow:
         try:
-            run_id = log_to_mlflow(report, run_name=f"eval-{report['generator']}")
+            variant = CONFIG["llm"].get("prompt_variant", "current")
+            run_name = f"eval-{report['generator']}" + ("" if variant == "current"
+                                                         else f"-{variant}")
+            run_id = log_to_mlflow(report, run_name=run_name, data=data)
         except Exception as error:  # noqa: BLE001 - network, credentials: keep the local file
             print(f"MLflow logging failed ({type(error).__name__}: {error}).")
     report["mlflow_run_id"] = run_id

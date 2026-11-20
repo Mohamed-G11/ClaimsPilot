@@ -91,7 +91,7 @@ def test_model_option_overrides_the_config_for_the_run(monkeypatch, tmp_path):
     monkeypatch.setitem(CONFIG["llm"], "model", "model-from-config")   # restored after
     monkeypatch.setitem(CONFIG["llm"], "max_tokens", 220)
     monkeypatch.setattr(evaluate, "RESULTS_FILE", tmp_path / "eval_results.json")
-    monkeypatch.setattr(evaluate, "load_cases", list)              # no claim
+    monkeypatch.setattr(evaluate, "load_cases", lambda path: [])  # no claim
     monkeypatch.setattr(evaluate, "warm_up", lambda: None)         # no Ollama call
     seen = {}
 
@@ -117,3 +117,67 @@ def test_without_ollama_host_the_config_host_is_used(fake_ollama, monkeypatch):
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     generation.ollama_generate("Bonjour")
     assert fake_ollama["url"] == f"{CONFIG['llm']['host'].rstrip('/')}/api/generate"
+
+
+# --- prompt variants (llm.prompt_variant) ------------------------------------------
+
+PROMPT_ARGS = {
+    "claim_text": "Un véhicule m'a percuté.", "insurer": "AXA", "formula": "TIERS",
+    "bought": ["rc", "defense_recours"], "cause": "collision",
+    "damages_fr": ["enfoncement pare-chocs arrière"], "needed": ["collision", "tous_risques"],
+    "clauses": [{"clause_id": "AXA-015", "title": "Dommages collision",
+                 "text": "Nous garantissons les dommages...", "is_exclusion": False}],
+}
+
+
+def test_current_is_the_default_and_unchanged(monkeypatch):
+    monkeypatch.setitem(CONFIG["llm"], "prompt_variant", "current")
+    prompt = generation.build_prompt(**PROMPT_ARGS, covered=False)
+    assert prompt == generation.build_prompt(**PROMPT_ARGS)            # covered not used
+    assert "Commence par « Décision : COUVERT » ou « Décision : NON COUVERT »" in prompt
+    assert "déjà été prise" not in prompt and "ne contient que" not in prompt
+
+
+def test_explain_rule_gives_the_rule_verdict_and_asks_only_to_explain():
+    prompt = generation.build_prompt(**PROMPT_ARGS, covered=False, variant="explain_rule")
+    assert "déjà été prise par les règles du contrat : « Décision : NON COUVERT »" in prompt
+    assert "Commence ta réponse exactement par « Décision : NON COUVERT »" in prompt
+    assert "ou « Décision : NON COUVERT »" not in prompt                # no free choice
+    covered = generation.build_prompt(**PROMPT_ARGS, covered=True, variant="explain_rule")
+    assert "« Décision : COUVERT »" in covered
+
+
+def test_explain_rule_without_a_verdict_is_an_error():
+    with pytest.raises(ValueError):
+        generation.build_prompt(**PROMPT_ARGS, variant="explain_rule")
+
+
+def test_formula_hint_says_tiers_does_not_pay_for_the_own_car():
+    prompt = generation.build_prompt(**PROMPT_ARGS, variant="formula_hint")
+    assert "PAS les dommages au véhicule de l'assuré" in prompt
+    assert "Commence par « Décision : COUVERT » ou « Décision : NON COUVERT »" in prompt
+    tr = generation.formula_hint("TR", ["rc", "defense_recours", "collision", "vol"])
+    assert "uniquement par ces garanties : collision, vol" in tr
+
+
+def test_unknown_variant_is_an_error():
+    with pytest.raises(ValueError, match="unknown llm.prompt_variant"):
+        generation.build_prompt(**PROMPT_ARGS, variant="other")
+
+
+def test_prompt_variant_option_overrides_the_config_for_the_run(monkeypatch, tmp_path):
+    monkeypatch.setitem(CONFIG["llm"], "prompt_variant", "current")
+    monkeypatch.setattr(evaluate, "RESULTS_FILE", tmp_path / "eval_results.json")
+    monkeypatch.setattr(evaluate, "load_cases", lambda path: [])
+    monkeypatch.setattr(evaluate, "warm_up", lambda: None)
+    seen = {}
+
+    def fake_evaluate(cases, generator=None):
+        seen["variant"] = CONFIG["llm"]["prompt_variant"]
+        return {"metrics": {"llm_answers": 0}, "rows": []}
+
+    monkeypatch.setattr(evaluate, "evaluate", fake_evaluate)
+    evaluate.main(["--prompt-variant", "formula_hint", "--no-mlflow"])
+    assert seen["variant"] == "formula_hint"
+    report = json.loads((tmp_path / "eval_results.json").read_text(encoding="utf-8"))
+    assert report["llm_settings"]["prompt_variant"] == "formula_hint"

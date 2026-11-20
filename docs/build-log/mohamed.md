@@ -3,6 +3,75 @@
 This file is my memory of the project: what was built, in which order, and why.
 It is updated at the end of every task.
 
+## Morning summary (Nov 20)
+
+**In one line:** the warm-start fix and tasks 5–9 are done and committed on stacked branches; **nothing is pushed**. The Docker stack is running (3 × healthy). Final branch: **236 tests passed**, ruff clean.
+
+### Done, per task
+
+| Task | State | Entry |
+|---|---|---|
+| Fix: LLM warm start + `OLLAMA_KEEP_ALIVE=24h` + test photos mounted in api / ui | done and checked on Docker: qwen2.5:7b loaded 30 s after start with no claim; first claim after a restart 69.5 s with an LLM answer (was 188 s and a template fallback) | 13 |
+| 5. Policy prompt variants (`current` default, `explain_rule`, `formula_hint`) | done, 2 runs logged; **default unchanged** | 14 |
+| 6. End-to-end evaluation harness (`python -m mlops.evaluate_e2e`) | done, dry run on 3 unlabelled claims, MLflow `claimspilot-decision` | 15 |
+| 7. Templates for the human-written test sets (`docs/test-sets/`) | done (+ `--cases` option for the policy evaluation) | 16 |
+| 8. Decision sheet for the 12 open questions (`docs/decisions/open-questions.md`) | done, no rule changed | 17 |
+| 9. Monitoring proposal (`docs/proposals/monitoring.md`) | done, no code | 18 |
+
+Task 5 in numbers (qwen2.5:7b, 30 eval claims):
+
+| | current | explain_rule | formula_hint |
+|---|---|---|---|
+| coverage_accuracy | 73.3 % | 96.7 % | 83.3 % |
+| contradictions | 7 / 18 | 0 / 18 | 4 / 18 |
+
+`explain_rule` gets 0 contradictions **because it tells the model the answer**: the contradiction check then no longer works as an independent second opinion (details in entry 14).
+
+### Tests
+
+| Branch | pytest | ruff |
+|---|---|---|
+| `fix/llm-warm-start` | 219 passed | clean |
+| `feat/policy-prompt-fix` | 226 passed | clean |
+| `feat/e2e-evaluation` (last) | **236 passed** | clean |
+
+### Branches and merge order (each one starts from the previous one)
+
+| # | Branch | Own commits | Head |
+|---|---|---|---|
+| 1 | `feat/policy-llm-choice` (already on GitHub at `ed2220b`) | 8 | `ed2220b` |
+| 2 | `feat/docker-full-stack` | 3 | `5fd673d` |
+| 3 | `feat/langfuse-tracing` | 5 | `800433e` |
+| 4 | `fix/llm-warm-start` | 3 | `37726f7` |
+| 5 | `feat/policy-prompt-fix` | 2 | `41f71e1` |
+| 6 | `feat/e2e-evaluation` | 6 | `1b01adb` |
+
+Merge 1 → 6 in this order. Each PR then shows only its own commits.
+
+### Questions waiting for you
+
+**New today**
+1. **WSL memory (speed).** Claims became 2–3× slower tonight (50–75 s instead of 16–23 s): Ollama generates 4 tokens/s, and the containers use about 6.4 of the 7.4 GiB that WSL gives Docker (default: 50 % of 16 GB), with the model kept loaded 24 h. Options: raise `memory=` in `%UserProfile%\.wslconfig` (e.g. 10GB) and restart WSL; or shorten `OLLAMA_KEEP_ALIVE`. I changed nothing (your machine's setting). Entry 15.
+2. **Prompt variant (entry 14):** keep `current`, or switch to `explain_rule` (accuracy 96.7 %, no independent check) or `formula_hint` (83.3 %, check kept)? Rerun `current` on the Docker Ollama (~15 min) for a fair time comparison? If `explain_rule`: should a verdict-only answer (E03: no explanation) fall back to the template?
+3. **The 12 rule and evaluation questions:** one page with options and the eval claims each one moves: `docs/decisions/open-questions.md` (Q1–Q11, Q17).
+4. **Test-set writers:** who writes the NLP held-out claims (Mohamed 15, Wiem 15), the independent policy claims (Wiem or Hend, ~30) and the e2e demo claims (20–30)? Templates: `docs/test-sets/`.
+5. **Monitoring (proposal, 4 questions):** prediction log in the API or export from Langfuse; store claim texts or only features; collect the handler's final decision in the UI (Wiem); owner.
+6. **App:** you decide today. `docs/proposals/app-options.md` is still uncommitted (task 4).
+
+**Still open from before**
+7. Wiem's stricter decision rules as the agreed defaults (entry 7).
+8. `scikit-learn` missing from every requirements file (Hend's NLP evaluation), and stray merge lines in `docs/progress/wiem.md` (entry 8).
+9. Platform items of the Nov 16 list not yet answered: pinning `requirements-vision.txt` / `requirements-ui.txt` (Wiem's), Python 3.11 vs 3.12 venv, the `.gitconfig` credential-helper typo.
+
+### Things to know (no question)
+
+- `.env`: I never opened, printed, searched, moved or renamed it. `docker compose` and the MLflow helper (`load_dotenv` in `mlops/tracking.py`) read it themselves when the tasks used the stack and MLflow.
+- **Host Ollama:** the instance I started by accident on Nov 20 is still running (tray icon). The evaluations used the Docker Ollama (`http://[::1]:11434`), so no second 5 GB copy was loaded.
+- **Langfuse:** a few test traces (claim ids `E2E-1`, `C-001`…) from one pytest run before `tests/conftest.py` existed can be deleted in the UI (entry 11).
+- **MLflow runs of the night:** `ca98f6e6…` (explain_rule), `423e8907…` (formula_hint), `b5a7f992…` (e2e dry run, new experiment `claimspilot-decision`).
+
+---
+
 ## Night summary (Nov 16)
 
 **In one line:** tasks A, 1, 2, 3, 4 and 5 are coded, tested and committed locally; **nothing could be pushed** (GitHub asked for a sign-in), the LLM answers could not be measured (model `phi3.5` not pulled) and the Docker image could not be built (Docker Desktop not running).
@@ -1074,6 +1143,180 @@ No timeout was changed.
 ### Note
 
 If the first claim must also be fast for vision and retrieval, the same warm-up could load YOLO and the embedding model. Not done: you asked for the LLM only.
+
+---
+
+## Entry 14 — Task 5: policy prompt experiment (no decision taken)
+
+**Date:** 2026-11-20 · **Branch:** `feat/policy-prompt-fix` (stacked on `fix/llm-warm-start`) · **Commits:** `fd856aa`, this entry
+**Goal:** try two prompt fixes for the open issue of entry 9 (qwen2.5:7b contradicts the rule on 7 / 18 claims, mostly TIERS). **The default stays `current`.**
+
+### Files, in order
+
+1. `agents/policy/generation.py`: `build_prompt(..., covered=None, variant=None)`, with variant = `llm.prompt_variant` by default.
+   - `current`: today's prompt. **Checked: all 18 eval prompts are character-for-character identical to the old code.**
+   - `explain_rule`: the prompt says "La décision a déjà été prise par les règles du contrat : « Décision : X »", then "Commence ta réponse exactement par « Décision : X », puis explique pourquoi avec les clauses. Ne change pas la décision."
+   - `formula_hint`: the current prompt plus one sentence built from `config.yaml` `formulas`. For TIERS: "…ne contient que la responsabilité civile et la défense et recours : elle paie les dommages causés aux autres, mais PAS les dommages au véhicule de l'assuré." For TR: the list of guarantees that pay for the customer's own car. The verdict is not given.
+   - An unknown variant, or `explain_rule` without a verdict, raises a `ValueError`.
+2. `agents/policy/agent.py`: passes the rules' verdict (`covered`) to `build_prompt`.
+3. `agents/policy/config.yaml`: `llm.prompt_variant: current` (new key, with a comment).
+4. `agents/policy/evaluate.py`: `--prompt-variant` option (in memory, like `--model`). MLflow param `llm_prompt_variant` + tag `prompt_variant`; run name `eval-<model>-<variant>`.
+5. Tests: `tests/policy/test_generation.py` (current unchanged and default, explain_rule wording for both verdicts, explain_rule without verdict = error, formula_hint for TIERS and TR, unknown variant = error, `--prompt-variant` override) and `tests/policy/test_agent.py` (the agent passes the rules' verdict). **226 passed**, ruff clean.
+
+### Results (qwen2.5:7b, `--max-tokens 1024`, temperature 0, 30 eval claims = 18 LLM calls)
+
+| Metric | current | explain_rule | formula_hint |
+|---|---|---|---|
+| MLflow run | `bdc2dc63bd2e482baeacd78def439d40` (entry 9) | `ca98f6e62c944b08b5a8bd89b16852af` | `423e890731824d6fa5678ec82e38cdaa` |
+| coverage_accuracy (30 claims) | 73.3 % | **96.7 %** (= template) | 83.3 % |
+| Contradictions (→ `covered=None`) | 7 / 18 (E03, E04, E10, E13, E17, E24, E25) | **0** | 4 / 18 (E03, E04, E17, E24: all TIERS) |
+| Agrees with the rule | 61.1 % | 100 % | 77.8 % |
+| Cites a retrieved clause | 77.8 % | 72.2 % | 77.8 % |
+| Invented citation | 0 % | 0 % | 0 % |
+| Cites a correct (expected) clause, all claims | 64 % | 52 % | 56 % |
+| Format OK / wrong language | 100 % / 0 % | 100 % / 0 % | 100 % / 0 % |
+| Fallback to template | 0 | 0 | 0 |
+| Seconds per answer, mean / median / max | 20.1 / 20.6 / 31.7 | 54.2 / 53.3 / 78.3 | 51.9 / 54.2 / 71.7 |
+
+**Seconds are not comparable between `current` and the two new runs.** `current` ran on the host Ollama (native Windows, nothing else loaded). The two new runs used the Docker Ollama (WSL, `api` and `ui` containers running beside it), so they would not load a second 5 GB copy of the model. The prompts are almost the same length, so the 2.5× is most likely the environment. A fair time comparison needs `current` rerun on the Docker Ollama (question 2).
+
+### E03 and E13 answers
+
+**E03** (AXA-**TIERS**, collision, rule: NON COUVERT, expected: false)
+- current, contradiction → `covered=None`: "Décision : COUVERT [AXA-015]. Le sinistre est couvert par la garantie dommage collision, car il s'agit d'une collision avec un autre véhicule, ce qui est inclus dans la formule TIERS de l'assurance AXA."
+- explain_rule, `covered=False`: "Décision : NON COUVERT [AXA-016-2, AXA-014-2]". Right verdict, but **no explanation at all**: only the verdict line and two clause ids. The format metric still counts it as OK (it starts with the decision, ≤ 4 sentences).
+- formula_hint, still a contradiction → `covered=None`: "Décision : COUVERT [AXA-015]. Le sinistre est une collision avec un autre véhicule, ce qui est couvert par la garantie dommage collision [AXA-015]." The hint sentence was ignored.
+
+**E13** (SANLAM-TR, fire, rule: COUVERT, expected: true)
+- current, contradiction → `covered=None`: "Décision : NON COUVERT [SANLAM-045, SANLAM-044]. Selon les clauses [SANLAM-045] et [SANLAM-044], la garantie R10 (Vol et incendie du véhicule Assuré au premier évènement) ne s'applique qu'au premier sinistre … De plus, les clauses d'exclusions prévues dans le risque 8 … ne permettent pas la couverture de l'incendie de la voiture stationnée, qui est une situation exclue."
+- explain_rule, `covered=True`: "Décision : COUVERT [SANLAM-045, SANLAM-071, SANLAM-044]. Selon les clauses [SANLAM-045] et [SANLAM-071], la garantie incendie du véhicule est couverte, même si aucun dommage physique n'est visible. De plus, la garantie R10 (Vol et incendie du véhicule Assuré) n'est pas exclue par les clauses [SANLAM-044], et l'incendie est une cause couverte par la formule TR de votre contrat."
+- formula_hint, `covered=True`: "Décision : COUVERT [SANLAM-045, SANLAM-071]. Selon la clause [SANLAM-045], la garantie R10 (Vol et incendie du véhicule Assuré) fait partie des garanties incluses dans la formule TR de votre contrat. Bien que les dommages soient visibles sur les photos, aucun dommage physique n'est mentionné. L'incendie qui a causé la perte totale de votre véhicule est couvert par la garantie R17 «Perte Totale-Incendie», qui est également incluse dans la formule TR." Right verdict, but one confused sentence about the photos.
+
+### What `explain_rule` changes for the contradiction safety check
+
+Today (`current`), the LLM gives its own verdict and the agent compares it with the rule. A disagreement sets `covered=None`, so a human decides. This works as an **independent second opinion**: when the LLM disagrees, nobody is told the claim was clear.
+
+With `explain_rule` the LLM is **told** the verdict and asked to start with it:
+- the check still runs, but it now only catches a model that **ignores the instruction**. 0 / 18 here: agreement is 100 % by construction, not because the model understood the contract;
+- the LLM can no longer flag a rule mistake. In this eval set the 7 contradictions of `current` were all LLM mistakes (the rule matched the expected label every time, so coverage accuracy goes back to the template's 96.7 %). On real claims, a wrong rule would now go out with a confident explanation and no human review;
+- the explanation may be thin (E03), or may justify the verdict with weak arguments, because the model is asked to defend an answer it did not reach.
+
+`formula_hint` keeps the independent check (the LLM still decides) and removes 3 of the 7 contradictions (E10, E13, E25), but not the 4 TIERS collision / glass claims.
+
+### Concepts
+
+- **Second opinion vs explanation**: an LLM that decides alone can catch a rule mistake, but can also be wrong (here: 7 times). An LLM that only explains cannot contradict, but cannot catch anything either.
+- **Confound in timing**: two runs differ in more than the variable you test (here the Ollama host), so their times cannot be compared.
+
+### Open questions for Mohamed
+
+1. **Which variant, if any, becomes the default?** (The default stays `current`.) Trade-off: `explain_rule` gives accuracy 96.7 % but no independent check; `formula_hint` keeps the check, with 83.3 %.
+2. **Rerun `current` on the Docker Ollama** (about 15 min) to compare seconds fairly?
+3. If `explain_rule` is chosen: should an answer with no explanation (like E03: verdict + ids only) count as a bad format, i.e. falls back to the template?
+
+---
+
+## Entry 15 — Task 6: end-to-end evaluation harness
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` (stacked on `feat/policy-prompt-fix`) · **Commit:** `0a493bf`
+**Goal:** score the final decision of the **running** API on demo claims written by people.
+
+### Files
+
+1. `mlops/evaluate_e2e.py` (new): `python -m mlops.evaluate_e2e --claims <csv> [--api-url http://localhost:8000] [--output data/e2e/e2e_results.json] [--no-mlflow]`.
+   - It checks `/health`, sends each row to `POST /claims/analyze` (timeout 600 s for cold starts), and records: decision, confidence, decision status (`agents["decision"]`), each agent's status, seconds, Langfuse trace id, `match`.
+   - Scoring: `match` = decision == `expected_decision`; **`None` when `expected_decision` is empty (run, not scored)**; an API error on a scored claim counts as wrong.
+   - Metrics: n claims / scored / errors, accuracy, accuracy per expected class, human_review rate, decision counts, seconds mean / median / max.
+   - Output: a JSON file and MLflow (experiment **`claimspilot-decision`**, tag **`eval=e2e`**, params `api_url`, `claims_file`, `claims_md5`, `n_claims`, plus the 4 required tags).
+   - It refuses bad rows with their row number: missing column, empty or duplicate id, invalid `expected_decision`, missing photo / text / policy, template `EXAMPLE` rows.
+2. `tests/mlops/test_evaluate_e2e.py` (new, 9 tests, fake API with `httpx.MockTransport`): scoring only rows with a label, `|`-separated photos, API error = wrong, row checks, API down = clear message.
+3. `docs/test-sets/e2e/dry_run.csv`: 3 claims built from existing material, **`expected_decision` empty**. Texts of eval claims E01, E04, E23; dataset test photos (paths as mounted in Docker).
+4. `.gitignore`: `data/e2e/` (real demo claims and results stay out of git).
+
+### Dry run (Docker stack, MLflow run `b5a7f992b4884a2e8861eb270248be66`)
+
+| Claim | Text from | Photo (vision) | Decision | Status | Seconds | Trace |
+|---|---|---|---|---|---|---|
+| DRY-1 | E01 (AXA-TR collision, front bumper) | front_bumper dent | approve | langgraph | 52.1 | `8d826f6430738d64689e469e5e2fc277` |
+| DRY-2 | E04 (SANLAM-TIERS, front bumper + headlight, EN) | front_bumper dent | human_review | langgraph | 75.1 | `ee0a95c67cc64d13320d42769c7125a5` |
+| DRY-3 | E23 (AXA-TR, front bumper) | taillight crack | human_review | langgraph | 50.8 | `fbc73a76a1d1449443029cdcc752de96` |
+
+Not scored (no expected decision, as asked). n_errors 0.
+
+**How to run it (for the real demo set):**
+
+```
+docker compose up -d                                   # wait for 3 x healthy
+copy docs\test-sets\e2e\template.csv data\e2e\demo_claims.csv   # then fill it (humans), delete EXAMPLE rows
+python -m mlops.evaluate_e2e --claims data/e2e/demo_claims.csv
+```
+
+**Slow claims (50–75 s instead of 16–23 s this morning).** A direct test in the `ollama` container gives **4 tokens/s**. `ollama` uses 5.9 of the 7.4 GiB that WSL gives Docker, and `api` dropped from 900 MB to 426 MB: memory pressure in the WSL VM (models stay loaded now, keep-alive 24 h). The task 5 runs were slowed the same way. See question 1 of the morning summary (WSL memory).
+
+---
+
+## Entry 16 — Task 7: templates for the human-written test sets
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` · **Commits:** `2bad4cf`, `413e011`
+
+### What I read first
+
+- **Hend's NLP held-out format** (`data/nlp/validate_heldout.py`): exact columns `claim_id,language,text,photo_parts,true_parts,label`; files `data/nlp/{independent,wiem,mohamed}_claims.csv`; ≥ 120 claims, ≥ 40 per label, ≥ 15 from Wiem and from Mohamed; `fr`/`en` only; parts without `other`.
+- **Policy** (`data/policy/eval_claims.csv`): `claim_id,policy_id,language,text,damages,expected_covered,expected_clauses,category,note`.
+- **E2E** (task 6): `claim_id,photo_paths,text,policy_id,language,expected_decision,written_by`.
+
+### Files (`docs/test-sets/`)
+
+- `README.md`: the 3 sets (writers, size, what each measures), **the rule: writers must not read the rules, configs, prompts or code first** (they may read the contract PDFs), how to use a template.
+- `nlp-heldout/`, `policy-independent/`, `e2e/`: one `template.csv` each with **2 rows marked `EXAMPLE`** (format only, "not a real label"), and a README: who writes, how many, where the file goes, each column, the rule.
+  - NLP held-out: Mohamed 15, Wiem 15 (+ Hend's independent claims), owner Hend.
+  - Independent policy claims: about 30, by Wiem or Hend.
+  - E2E demo: 20–30, the team.
+- Safety: the e2e script and the policy evaluation **refuse rows whose id starts with `EXAMPLE`**. Hend's validator would accept them, and its README says to delete them.
+- `agents/policy/evaluate.py`: new **`--cases`** option, so the independent set can be evaluated (`--cases data/policy/independent_claims.csv`); `data_version` follows the file used. Tests: EXAMPLE rows refused, `--cases` reads another file. Two older tests that faked `load_cases` were updated for the new argument.
+
+I wrote no claim and no expected answer. The only example values are the 4 × 2 `EXAMPLE` rows, marked as format only.
+
+---
+
+## Entry 17 — Task 8: decision sheet for the 12 open questions
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` · **Commit:** `affa65c` · **File:** `docs/decisions/open-questions.md`
+
+**Which 12:** items 1–11 and 17 of the Nov 16 list (decision rules, policy rules, evaluation). The platform items 12–16 and 18 are mostly answered since then.
+
+For each question: today's behaviour, options, files / config / tests that would change, and **which eval claims change**. **No rule was changed:** policy options were run on in-memory copies of `config.yaml` (template answers, 30 eval claims); decision-level effects use Hend's real NLP agent + the policy rules + Wiem's decision rules on each eval claim.
+
+Main findings:
+
+| Question | Option B moves | Final decision |
+|---|---|---|
+| Q1 not covered + uncertain text | E10 | reject → human_review |
+| Q8 theft / fire with no damage | E08, E09, E12, E13 | human_review → approve (needs the cause in `PolicyResult`: a schema change) |
+| Q2 several causes | E06 | approve → human_review |
+| Q3 flood in TR | E21 (policy None → True) | none (still human_review) |
+| Q4 AXA without vandalism | E20 | human_review → **reject** |
+| Q9 more keywords | E11 (policy accuracy 96.7 → 100 %) | none |
+| Q5, Q7, Q17 | no eval claim | none |
+
+Today on the 30 eval claims: 8 approve, 5 reject, 17 human_review. These final decisions have no labels (the eval set labels coverage only).
+
+---
+
+## Entry 18 — Task 9: monitoring proposal (no code)
+
+**Date:** 2026-11-20 · **Branch:** `feat/e2e-evaluation` · **Commit:** `b31f660` · **File:** `docs/proposals/monitoring.md`
+
+Contents:
+- what exists (Langfuse per claim, MLflow per evaluation run, no stored record of live claims);
+- what Evidently could watch: decision and human_review rates and reasons, decision status (fallbacks), agent stubs, vision confidence and parts, text language and length, NLP and policy results, LLM template rate, latency, and later ground truth;
+- the record to store per claim (features, not raw text or photos);
+- 3 storage options: a prediction log in the API, an export from Langfuse, MLflow only;
+- how it fits with Langfuse (debug one claim), MLflow (version the reports), a GitHub Action (schedule);
+- effort: about 13–19 h with an API log, 15–23 h with a Langfuse export, without the human-feedback field;
+- pros, cons and 4 questions for the team. No choice made.
+
+`docs/proposals/app-options.md` (task 4) is still **not committed**, on purpose.
 
 ---
 

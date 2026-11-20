@@ -90,3 +90,32 @@ def test_format_and_language_checks():
     assert not evaluate.format_ok("Le sinistre est couvert.")
     assert evaluate.wrong_language("Okay, the user is asking about the policy.")
     assert not evaluate.wrong_language("La garantie collision est incluse dans la formule.")
+
+
+def test_template_example_rows_are_refused(tmp_path):
+    import pytest
+
+    path = tmp_path / "cases.csv"
+    path.write_text("claim_id,policy_id,language,text,damages,expected_covered,"
+                    "expected_clauses,category,note\n"
+                    "EXAMPLE-1,AXA-TR,fr,t,,true,,collision,EXAMPLE\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="delete the EXAMPLE rows"):
+        evaluate.load_cases(path)
+
+
+def test_cases_option_reads_another_file(monkeypatch, tmp_path):
+    path = tmp_path / "independent.csv"
+    path.write_text("claim_id,policy_id,language,text,damages,expected_covered,"
+                    "expected_clauses,category,note\n"
+                    "I-01,AXA-TR,fr,Collision.,front_bumper:dent,true,,collision,\n",
+                    encoding="utf-8")
+    monkeypatch.setattr(evaluate, "RESULTS_FILE", tmp_path / "r.json")
+    seen = {}
+
+    def fake_evaluate(cases, generator=None):
+        seen["ids"] = [c["claim_id"] for c in cases]
+        return {"metrics": {"llm_answers": 0}, "rows": []}
+
+    monkeypatch.setattr(evaluate, "evaluate", fake_evaluate)
+    evaluate.main(["--cases", str(path), "--no-llm", "--no-mlflow"])
+    assert seen["ids"] == ["I-01"]

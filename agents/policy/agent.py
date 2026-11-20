@@ -186,7 +186,7 @@ def analyze(claim: ClaimInput, vision: VisionResult, retriever=None,
     try:
         answer = generate(generation.build_prompt(
             claim.text, insurer, formula, bought, cause, damages_in_french(vision),
-            needed, found))
+            needed, found, covered=covered))
     except generation.GeneratorUnavailable as error:
         logger.info("claim %s: template answer (%s)", claim.claim_id, error)
         return done("formula", covered, template, found, "template",

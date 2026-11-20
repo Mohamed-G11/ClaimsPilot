@@ -1,0 +1,3 @@
+claim_id,language,text,photo_parts,true_parts,label
+EXAMPLE-1,fr,"EXAMPLE - format only, delete this row: J'ai reculé dans un poteau, l'arrière est enfoncé.",rear_bumper,rear_bumper,consistent
+EXAMPLE-2,en,"EXAMPLE - format only, delete this row: Someone scratched my door.",front_bumper,door,inconsistent

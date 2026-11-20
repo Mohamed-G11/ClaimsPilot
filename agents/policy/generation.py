@@ -128,24 +128,68 @@ def default_generator() -> Generator:
     return ollama_generate if CONFIG["llm"]["enabled"] else no_generator
 
 
+PROMPT_VARIANTS = ("current", "explain_rule", "formula_hint")
+# Guarantees that pay for the third party only (not for the customer's own car).
+THIRD_PARTY_ONLY = {"rc", "defense_recours"}
+
+
+def formula_hint(formula: str, bought: list[str]) -> str:
+    """What the formula pays for, from config.yaml `formulas` (prompt_variant formula_hint)."""
+    own = [GUARANTEE_FR.get(g, g) for g in bought if g not in THIRD_PARTY_ONLY]
+    if not own:
+        return (f"La formule {formula} ne contient que la responsabilité civile et la défense "
+                "et recours : elle paie les dommages causés aux autres, mais PAS les dommages "
+                "au véhicule de l'assuré.")
+    return (f"La formule {formula} paie les dommages au véhicule de l'assuré uniquement par "
+            f"ces garanties : {', '.join(own)}. Un sinistre n'est couvert que si une des "
+            "garanties pouvant le couvrir fait partie de la formule.")
+
+
 def build_prompt(claim_text: str, insurer: str, formula: str, bought: list[str],
                  cause: str | None, damages_fr: list[str], needed: list[str],
-                 clauses: list[dict]) -> str:
-    """Everything the LLM is allowed to use: the claim and the retrieved clauses."""
+                 clauses: list[dict], covered: bool | None = None,
+                 variant: str | None = None) -> str:
+    """Everything the LLM is allowed to use: the claim and the retrieved clauses.
+
+    variant (default: llm.prompt_variant in config.yaml):
+    - "current": the original prompt (the LLM gives its own verdict);
+    - "explain_rule": the prompt gives the rules' verdict (`covered`) and asks the
+      LLM only to explain it with the clauses;
+    - "formula_hint": the original prompt + what the contract formula pays for.
+    """
+    variant = variant or CONFIG["llm"].get("prompt_variant", "current")
+    if variant not in PROMPT_VARIANTS:
+        raise ValueError(f"unknown llm.prompt_variant {variant!r} (one of {PROMPT_VARIANTS})")
+    if variant == "explain_rule" and covered is None:
+        raise ValueError("prompt_variant explain_rule needs the rules' verdict (covered)")
     example = clauses[0]["clause_id"] if clauses else "AXA-015"
     included = ", ".join(GUARANTEE_FR.get(g, g) for g in bought)
     useful = ", ".join(GUARANTEE_FR.get(g, g) for g in needed)
+    if variant == "explain_rule":
+        verdict = VERDICT_FR[covered]
+        instructions = [
+            f"La décision a déjà été prise par les règles du contrat : « Décision : {verdict} ».",
+            (f"Commence ta réponse exactement par « Décision : {verdict} », puis explique "
+             "pourquoi avec les clauses. Ne change pas la décision."),
+        ]
+    else:
+        instructions = [
+            "Commence par « Décision : COUVERT » ou « Décision : NON COUVERT », puis explique."]
+    contract = [(f"Contrat : {insurer}, formule {formula}. Garanties incluses dans la formule : "
+                 f"{included}.")]
+    if variant == "formula_hint":
+        contract.append(formula_hint(formula, bought))
     lines = [
         "Tu es un assistant pour gestionnaires de sinistres automobiles.",
         ("Réponds en français, en 2 ou 3 phrases, en utilisant UNIQUEMENT la déclaration "
          "et les clauses ci-dessous. N'invente rien."),
-        "Commence par « Décision : COUVERT » ou « Décision : NON COUVERT », puis explique.",
+        *instructions,
         f"Cite les identifiants des clauses utilisées entre crochets, par exemple [{example}].",
         "",
         f"Déclaration du client : {claim_text}",
         f"Dommages vus sur les photos : {', '.join(damages_fr) or 'aucun'}",
         f"Cause du sinistre : {CAUSE_FR[cause] if cause else 'non précisée dans la déclaration'}",
-        f"Contrat : {insurer}, formule {formula}. Garanties incluses dans la formule : {included}.",
+        *contract,
         f"Garanties pouvant couvrir ce sinistre : {useful}.",
         "",
         "Clauses du contrat :",

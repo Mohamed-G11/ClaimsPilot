@@ -1,0 +1,3 @@
+claim_id,photo_paths,text,policy_id,language,expected_decision,written_by
+EXAMPLE-1,/app/data/uploads/e2e/EXAMPLE-1_front.jpg,"EXAMPLE - format only, delete this row: Collision sur un parking, le pare-chocs avant est enfoncé.",AXA-TR,fr,approve,EXAMPLE - not a real label
+EXAMPLE-2,/app/data/uploads/e2e/EXAMPLE-2_rear.jpg|/app/data/uploads/e2e/EXAMPLE-2_side.jpg,"EXAMPLE - format only, delete this row: My car was hit from behind.",SANLAM-TIERS,en,reject,EXAMPLE - not a real label

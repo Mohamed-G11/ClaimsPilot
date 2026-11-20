@@ -229,3 +229,6 @@ data/uploads/
 
 # docker compose: default (empty) Ollama models folder
 data/ollama/
+
+# end-to-end evaluation: demo claims and results (written by people / by the script)
+data/e2e/
