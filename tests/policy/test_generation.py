@@ -130,7 +130,16 @@ PROMPT_ARGS = {
 }
 
 
-def test_current_is_the_default_and_unchanged(monkeypatch):
+def test_explain_rule_is_the_configured_default():
+    import yaml
+
+    from agents.policy.settings import CONFIG_PATH
+
+    config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    assert config["llm"]["prompt_variant"] == "explain_rule"      # chosen on Nov 20
+
+
+def test_current_variant_is_unchanged(monkeypatch):
     monkeypatch.setitem(CONFIG["llm"], "prompt_variant", "current")
     prompt = generation.build_prompt(**PROMPT_ARGS, covered=False)
     assert prompt == generation.build_prompt(**PROMPT_ARGS)            # covered not used

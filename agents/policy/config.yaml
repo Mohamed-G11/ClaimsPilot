@@ -125,7 +125,9 @@ llm:
   timeout_seconds: 150              # slower than this -> template answer
   temperature: 0
   max_tokens: 1024
-  # How the prompt is written (build log entry 14): current (the LLM gives its own
-  # verdict) | explain_rule (the rules' verdict is given, the LLM explains it) |
-  # formula_hint (current + what the contract formula pays for)
-  prompt_variant: current
+  # How the prompt is written (build log entries 14, 19): current (the LLM gives its
+  # own verdict) | explain_rule (the rules' verdict is given, the LLM explains it) |
+  # formula_hint (current + what the contract formula pays for).
+  # explain_rule chosen by Mohamed on Nov 20: the contradiction check then only
+  # catches a model that ignores the instruction (it is no independent opinion).
+  prompt_variant: explain_rule
