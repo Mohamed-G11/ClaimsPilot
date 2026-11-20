@@ -1600,6 +1600,67 @@ The `api` image was rebuilt with the short prompt (`/ready` 200 after 16 s, `oll
 
 ---
 
+## Entry 23 — `explain_rule` with the rules' reason: tried, **reverted**
+
+**Date:** 2026-11-20 · **Branch:** `feat/ollama-gpu` · **Commits:** `fe63707` (experiment), `9158dc0` (revert), this entry
+**Mohamed's answers to entry 22:**
+1. Confirmed: a failed warm-up step counts as finished for `/ready` and stays listed under `failed` (as built).
+2. Try giving the LLM the rules' own reason to rephrase. Keep it only if the TIERS answers give the real reason **and nothing else gets worse**. After this: no more prompt or performance tuning.
+
+### What was tried (`fe63707`)
+
+Only the **formula check** reaches the LLM: exclusions, incompatible photos, unknown guarantees and missing evidence all stop earlier with a fixed sentence, so the LLM never has to explain them. `rule_reason()` wrote that check's reason in French:
+- covered: "la formule TR inclut la garantie « incendie », qui couvre le sinistre déclaré (incendie)."
+- not covered: "pour le sinistre déclaré (collision / accident), il faut une de ces garanties : collision, tous risques ; la formule TIERS n'en inclut aucune. La formule TIERS ne garantit que la responsabilité civile et la défense et recours : les dommages au véhicule de l'assuré ne sont pas couverts."
+
+The `explain_rule` prompt then said "Raison donnée par les règles : …", "…reformule cette raison en 2 phrases courtes (50 mots au maximum en tout), en citant les identifiants des clauses." and "N'ajoute pas d'autre raison et ne change pas la décision." `current` was checked identical to the original (18 / 18).
+
+### Results (30 claims, qwen2.5:7b, `--max-tokens 1024`, GPU Docker Ollama)
+
+| | short (`ab6537ba477c4aaf84397b9843897508`, kept) | rules' reason (`af0010a74e494e95aef6da67d8c45183`) |
+|---|---|---|
+| coverage_accuracy | 96.7 % | 96.7 % |
+| contradictions / invented citations | 0 / 0 % | 0 / 0 % |
+| format OK | 100 % | 100 % |
+| cites a retrieved clause | 88.9 % | 94.4 % |
+| answers citing a correct clause (all claims) | 64 % | 76 % |
+| words per answer, mean / max | 28 / 38 | 24 / 39 |
+| seconds per answer, mean / median / max | 12.2 / 11.6 / 17.8 | 11.9 / 10.8 / 16.8 |
+
+**Real reason (my reading):**
+
+| Group | short | rules' reason |
+|---|---|---|
+| 5 TIERS claims | 1 clear (E10), 1 partial (E24), 3 wrong | **5 / 5 give the real reason** (E04 credits it to an exclusion clause id; E10 adds a vague extra sentence) |
+| 13 TR claims | **11 clear** ("guarantee X is included in formula TR") | **7 clear**: E01, E06, E15 lose the formula; **E05 has no sentence at all** ("Décision : COUVERT [AXA-015] Dommages collision [AXA-013] Dommage tous accidents") |
+
+**Decision rule not met:** TIERS is fixed, but the TR explanations got worse (11 → 7 clear, one answer with no explanation). The format metric did not catch E05: it only checks the decision line and the number of sentences. So the change was **reverted** (`9158dc0`). `git diff 15efec1 HEAD` on `generation.py` and its tests is empty, i.e. the code is exactly the kept short prompt of entry 22. The running `api` image was built from that code, so no rebuild was needed (checked inside the container: short prompt yes, rules' reason no). **252 passed**, ruff clean.
+
+### Side by side (short, kept → rules' reason, reverted)
+
+- **E03** (AXA-TIERS, rear-end collision)
+  - short: "Décision : NON COUVERT. La garantie collision n'est pas applicable car le véhicule n'a pas été impliqué dans une collision avec un autre véhicule. Dommage tous accidents exclut également les dommages non consécutifs à une collision. [AXA-015, AXA-014-2]" (wrong)
+  - reason: "Décision : NON COUVERT [AXA-015] et [AXA-016-2] ne sont pas applicables car la formule TIERS ne couvre pas les dommages au véhicule de l'assuré." (**real reason**)
+- **E04** (SANLAM-TIERS, crash in a parking lot, EN)
+  - short: "Décision : NON COUVERT. La garantie collision [SANLAM-023] et [SANLAM-028] ne s'applique pas aux dommages subis en dehors de la circulation, tels que dans un parking. Les clauses [SANLAM-025] et [SANLAM-015] excluent également ces dommages." (wrong)
+  - reason: "Décision : NON COUVERT [SANLAM-028] R7 Dommages collision - Exclusions prévoit que les dommages au véhicule ne sont pas couverts par la formule TIERS." (real reason, attributed to an exclusion clause)
+- **E10** (AXA-TIERS, theft)
+  - short: "Décision : NON COUVERT. La garantie vol de véhicule n'est pas incluse dans la formule TIERS d'AXA. [AXA-019-2] et [AXA-020-1] excluent cette garantie." (real reason)
+  - reason: "Décision : NON COUVERT [AXA-019-2, AXA-020-1] La formule TIERS ne couvre pas les dommages directs au véhicule volé. Les garanties de vol ne sont disponibles que si le véhicule est volé et que les conditions du contrat sont respectées." (real reason + vague sentence)
+- **E13** (SANLAM-TR, fire)
+  - short: "Décision : COUVERT. La garantie incendie est incluse dans la formule TR de votre contrat [SANLAM-045]. Cependant, la clause R8 exclut l'incendie non couvert par R10 [SANLAM-044]."
+  - reason: "Décision : COUVERT [SANLAM-045] La garantie incendie, incluse dans la formule TR, couvre le sinistre d'incendie déclaré." (cleaner)
+- **E17** (AXA-TIERS, windshield)
+  - short: "Décision : NON COUVERT. La garantie bris de glace est exclue par la clause [AXA-022-1] qui stipule que les dommages causés par des cailloux sont exclus." (wrong)
+  - reason: "Décision : NON COUVERT [AXA-021] La garantie bris de glace n'est pas incluse dans la formule TIERS [AXA-022-1]." (**real reason**)
+
+### State after this entry
+
+- Prompt in use (code and Docker image): `explain_rule` with the short instruction of entry 22.
+- As agreed: **no more prompt or performance tuning**. The TIERS weakness of the kept prompt (3 / 5 wrong reasons) is left to the human check of explanations.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
