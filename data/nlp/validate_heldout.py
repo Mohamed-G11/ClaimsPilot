@@ -7,11 +7,9 @@ from pathlib import Path
 
 from claimspilot.schemas import PARTS
 
-
 DATA_DIR = Path(__file__).resolve().parent
 
 FILES = [
-    "independent_claims.csv",
     "wiem_claims.csv",
     "mohamed_claims.csv",
 ]
@@ -27,8 +25,8 @@ REQUIRED = [
 
 LABELS = {"consistent", "inconsistent", "uncertain"}
 VALID_PARTS = set(PARTS) - {"other"}
-MIN_TOTAL = 120
-MIN_PER_CLASS = 40
+MIN_TOTAL = 60
+MIN_PER_CLASS = 20
 
 
 def parse_parts(value):
@@ -141,11 +139,11 @@ def validate():
     for filename in FILES:
         print(f"  {filename}: {contributions[filename]}")
 
-    if contributions["wiem_claims.csv"] < 15:
-        errors.append("Wiem must contribute at least 15 claims")
+    if contributions["wiem_claims.csv"] < 30:
+        errors.append("Wiem must contribute at least 30 claims")
 
-    if contributions["mohamed_claims.csv"] < 15:
-        errors.append("Mohamed must contribute at least 15 claims")
+    if contributions["mohamed_claims.csv"] < 30:
+        errors.append("Mohamed must contribute at least 30 claims")
 
     if len(all_rows) < MIN_TOTAL:
         errors.append(

@@ -2,8 +2,8 @@
 import pytest
 
 from agents.nlp.agent import (
-    extract_damaged_parts,
     check_consistency,
+    extract_damaged_parts,
 )
 
 
