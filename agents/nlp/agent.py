@@ -27,6 +27,8 @@ PART_KEYWORDS = {
         "pare choc avant",
         "par choc avant",
         "devant de ma voiture",
+        "l avant de la voiture",
+        "avant de la voiture",
         "front bumper",
         "front bumber",
         "front of my car",
@@ -86,6 +88,7 @@ PART_KEYWORDS = {
     "windshield": [
         "pare-brise",
         "pare brise",
+        "parebrise",
         "windshield",
         "windscreen",
     ],
@@ -123,6 +126,20 @@ def is_negated(text: str, start: int, end: int) -> bool:
     after = re.split(
         r"\b(?:but|mais|however)\b", after
     )[0]
+
+    # Exclude undamaged parts in French and English.
+    if re.search(
+        r"\b(?:is|was|were|are)\s+"
+        r"(?:fine|okay|ok|intact|undamaged)\b",
+        after[:45],
+    ):
+        return True
+
+    if re.search(
+        r"\b(?:pas|sans|aucun|aucune)\s+(?:le|la|les|un|une)?\s*$",
+        before,
+    ):
+        return True
 
     # English: "the windshield is not damaged"
     if re.search(
@@ -175,6 +192,15 @@ def extract_damaged_parts(text: str) -> list[str]:
                 re.finditer(pattern, normalized)
             )
 
+            if part == "headlight" and normalized_keyword == "phare":
+                matches = [
+                    match for match in matches
+                    if not re.match(
+                        r"\s+arriere\b",
+                        normalized[match.end():],
+                    )
+                ]
+
             if any(
                 not is_negated(
                     normalized,
@@ -207,6 +233,9 @@ def check_consistency(
     if not described or not detected:
         return "uncertain"
 
+    if described.issubset(detected):
+        return "consistent"
+
     overlap = len(described & detected) / len(described | detected)
 
     if overlap >= consistent_threshold:
@@ -235,8 +264,15 @@ def analyze_claim(text: str, vision_parts: list[str]) -> dict:
     }
 
 
-def run(claim: ClaimInput, vision: VisionResult) -> NLPResult:
-    """Analyze a claim using the shared ClaimsPilot schemas."""
+def run(
+    claim: ClaimInput,
+    vision: VisionResult,
+    method: str = "keywords",
+) -> NLPResult:
+    """Analyze a claim using keywords or optional Ollama extraction."""
+
+    if method not in {"keywords", "llm"}:
+        raise ValueError(f"Unsupported NLP method: {method}")
 
     if claim.claim_id != vision.claim_id:
         raise ValueError(
@@ -244,6 +280,20 @@ def run(claim: ClaimInput, vision: VisionResult) -> NLPResult:
         )
 
     described_parts = extract_damaged_parts(claim.text)
+    model_version = "nlp-keywords-v3"
+
+    if method == "llm":
+        from agents.nlp.llm_extractor import (
+            extract_with_llm,
+            load_config,
+        )
+
+        extraction = extract_with_llm(claim.text)
+        if extraction is not None:
+            described_parts = extraction["parts_damaged"]
+            model_version = (
+                f"nlp-llm-{load_config()['model']}"
+            )
 
     vision_parts = [
         damage.part
@@ -263,6 +313,9 @@ def run(claim: ClaimInput, vision: VisionResult) -> NLPResult:
         score = len(described & detected) / len(
             described | detected
         )
+
+        if described.issubset(detected):
+            score = 1.0
     else:
         score = 0.0
 
@@ -271,5 +324,5 @@ def run(claim: ClaimInput, vision: VisionResult) -> NLPResult:
         described_parts=described_parts,
         consistency=consistency,
         score=round(score, 4),
-        model_version="nlp-keywords-v2",
+        model_version=model_version,
     )

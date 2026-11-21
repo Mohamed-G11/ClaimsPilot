@@ -6,10 +6,12 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import mlflow
 from sklearn.metrics import (
+    accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
@@ -54,11 +56,15 @@ def get_dataset_version(dataset):
         Path(dataset).read_bytes()
     ).hexdigest()
 
+def evaluate(dataset, split="development", method="keywords"):
+    if split not in {"development", "heldout"}:
+        raise ValueError(f"Invalid evaluation split: {split}")
 
-def evaluate(dataset):
+    if method not in {"keywords", "llm"}:
+        raise ValueError(f"Invalid NLP method: {method}")
+
     dataset = Path(dataset)
 
-    # Load dataset
     with dataset.open(
         encoding="utf-8-sig",
         newline="",
@@ -94,9 +100,15 @@ def evaluate(dataset):
     pred_part_sets = []
 
     predictions = []
+    fallback_count = 0
+    total_seconds = 0.0
 
     # Evaluate every claim
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
+        print(
+            f"Processing claim {index}/{len(rows)}: {row['claim_id']}",
+            flush=True,
+        )
         claim = ClaimInput(
             claim_id=row["claim_id"],
             photo_paths=[],
@@ -122,7 +134,18 @@ def evaluate(dataset):
             model_version="evaluation-ground-truth",
         )
 
-        result = run(claim, vision)
+        start = time.perf_counter()
+        result = run(claim, vision, method=method)
+        elapsed = time.perf_counter() - start
+        total_seconds += elapsed
+        print(
+            f"Completed {index}/{len(rows)} in {elapsed:.1f}s "
+            f"using {result.model_version}",
+            flush=True,
+        )
+
+        if method == "llm" and result.model_version == "nlp-keywords-v3":
+            fallback_count += 1
 
         y_true.append(row["label"])
         y_pred.append(result.consistency)
@@ -145,6 +168,7 @@ def evaluate(dataset):
             "predicted_label": result.consistency,
             "predicted_parts": result.described_parts,
             "score": float(result.score),
+            "model_version": result.model_version,
         })
 
     # Classification metrics
@@ -164,7 +188,10 @@ def evaluate(dataset):
     )
 
     metrics = {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
         "macro_f1": float(macro_f1),
+        "seconds_per_claim": total_seconds / len(rows),
+        "fallback_rate": fallback_count / len(rows) if method == "llm" else 0.0,
     }
 
     for i, label in enumerate(LABELS):
@@ -246,6 +273,7 @@ def evaluate(dataset):
     git_commit = get_git_commit()
     dataset_version = get_dataset_version(dataset)
 
+
     # Save evaluation artifacts and log to MLflow
     with tempfile.TemporaryDirectory() as tmp:
         output = Path(tmp)
@@ -273,8 +301,8 @@ def evaluate(dataset):
         mlflow.set_experiment("claimspilot-nlp")
 
         with mlflow.start_run(
-            run_name="sprint2-dev-baseline"
-        ):
+            run_name=f"nlp-{split}-{method}"
+        ) as active_run:
             mlflow.log_param(
                 "dataset",
                 dataset.name,
@@ -284,11 +312,12 @@ def evaluate(dataset):
                 "dataset_size",
                 len(rows),
             )
+            mlflow.log_param("method", method)
 
             mlflow.set_tags({
                 "owner": "hend",
                 "sprint": "2",
-                "evaluation_split": "development",
+                "evaluation_split": split,
                 "git_commit": git_commit,
                 "dataset_version": dataset_version,
             })
@@ -298,6 +327,8 @@ def evaluate(dataset):
             mlflow.log_artifacts(
                 str(output)
             )
+
+            print("MLflow run ID:", active_run.info.run_id)
 
     print("\nMLflow logging complete.")
     print(json.dumps(metrics, indent=2))
@@ -316,7 +347,19 @@ if __name__ == "__main__":
         help="Path to the evaluation CSV dataset",
     )
 
+    parser.add_argument(
+        "--method",
+        choices=["keywords", "llm"],
+        default="keywords",
+    )
+
+    parser.add_argument(
+        "--split",
+        choices=["development", "heldout"],
+        default="development",
+    )
+
     args = parser.parse_args()
 
-    evaluate(args.dataset)
+    evaluate(args.dataset, split=args.split, method=args.method)
 
