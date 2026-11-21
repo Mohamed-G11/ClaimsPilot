@@ -1,0 +1,4 @@
+claim_id,photo_paths,text,policy_id,language,expected_decision,written_by
+DRY-1,/app/data/vision/car_dent_scratch_split/test/images/back_light-1---92-_jpg.rf.2883d651ea3c3807b5c2f61b3695946b.jpg,"Collision avec une autre voiture à un carrefour, mon pare-chocs avant est enfoncé.",AXA-TR,fr,,"dry run - text of eval claim E01, dataset test photo, no expected decision"
+DRY-2,/app/data/vision/car_dent_scratch_split/test/images/back_light-1---88-_jpg.rf.7c5b42a612ee4d5c76e8a320ffaa185b.jpg,"I had a crash in a parking lot, the front bumper and the headlight are broken.",SANLAM-TIERS,en,,"dry run - text of eval claim E04, dataset test photo, no expected decision"
+DRY-3,/app/data/vision/car_dent_scratch_split/test/images/back_light-1---28-_jpg.rf.4c4a1efedaaafb82429b3b2d8d655eda.jpg,Le pare-chocs avant est enfoncé.,AXA-TR,fr,,"dry run - text of eval claim E23, dataset test photo, no expected decision"

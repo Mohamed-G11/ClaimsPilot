@@ -1,4 +1,4 @@
-﻿# Sprint 2 Progress Report - Hend Zitouni
+# Sprint 2 Progress Report - Hend Zitouni
 
 ## Role
 
@@ -112,3 +112,32 @@ Keyword improvements, optional LLM integration, evaluation tooling,
 and held-out validation are implemented.
 
 Final independent evaluation remains pending.
+
+## Historical Sprint 2 Results (Keyword v2)
+
+The earlier NLP integration used `nlp-keywords-v2`.
+
+Development evaluation on `sprint2_test.csv` (15 synthetic cases):
+
+- Accuracy: 93.33% (14/15)
+- Macro F1: approximately 0.90
+- One disagreement: T013 (predicted uncertain; expected inconsistent)
+- NLP integration and edge-case tests: 10 passed
+
+Historical MLflow run:
+`c174666b74a34dc190970d20ff290d42`
+
+Historical agent commit:
+`4ce6d5faaacff7244510d6a9795fb459a4568f82`
+
+The team also generated 220 synthetic claims and 15 challenge cases,
+tracked the datasets using DVC, and synchronized them with DagsHub.
+
+These historical results are separate from the newer keyword-v3
+evaluation documented above.
+
+## Team Integration Status
+
+- NLP integration and dataset pull requests were previously submitted.
+- Final Vision-NLP integration testing remains pending.
+- The team must confirm the desired partial-overlap consistency behavior.

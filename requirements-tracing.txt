@@ -1,0 +1,4 @@
+# Langfuse tracing (Mohamed) - optional: without it (or without keys) the API runs untraced.
+# Installed in the full Docker image; NOT in CI (tests use a fake client).
+# Install: pip install -r requirements-tracing.txt
+langfuse==5.2.0

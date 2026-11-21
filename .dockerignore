@@ -1,8 +1,17 @@
+# Keep the build context small: only code and requirements are needed.
 .venv
 .git
+.github
 .env
+.dvc
 data
 models
-__pycache__
+runs
+notebooks
+tests
+docs
+mlops
+**/__pycache__
 .pytest_cache
 .ruff_cache
+*.md

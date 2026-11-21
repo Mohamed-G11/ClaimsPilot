@@ -1,0 +1,17 @@
+# Optional override: give the NVIDIA GPU to the ollama service only.
+# The main docker-compose.yml stays CPU-only (teammates without an NVIDIA GPU).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Needs: an NVIDIA driver on the host (nvidia-smi works) and Docker Desktop with
+# the WSL 2 backend (GPU support is built in). Check with:
+#   docker compose exec ollama ollama ps      # PROCESSOR column: "100% GPU" or "x%/y% CPU/GPU"
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

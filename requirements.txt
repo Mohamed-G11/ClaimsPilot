@@ -1,3 +1,9 @@
-fastapi
-uvicorn
-pydantic
+# API only - installed in the Docker image. Versions are pinned so that a new
+# release cannot break CI or Docker without a change from us.
+fastapi==0.162.0
+uvicorn==0.54.0
+pydantic==2.14.2
+# multipart/form-data: photo upload of the web app (POST /claims/upload)
+python-multipart==0.0.34
+# decision rules read agents/decision/config.yaml (also the fallback in the light image)
+pyyaml==6.0.3

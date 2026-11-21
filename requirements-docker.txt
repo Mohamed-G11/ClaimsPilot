@@ -1,0 +1,13 @@
+# Runtime libraries of the REAL agents, for the "full" Docker image only
+# (Dockerfile target `full`). Not installed in CI.
+# PyTorch (CPU build) is installed by the Dockerfile before this file, from
+# https://download.pytorch.org/whl/cpu, so that pip does not pull the GPU build.
+# Training-only libraries (mlflow, roboflow, pandas, dvc) stay in requirements-vision.txt.
+-r requirements.txt
+pyyaml==6.0.3
+# policy agent
+sentence-transformers==6.2.0
+chromadb==1.5.9
+# vision agent (same range as requirements-vision.txt)
+ultralytics>=8.3,<9
+opencv-python-headless

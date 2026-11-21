@@ -1,11 +1,86 @@
+# ClaimsPilot full stack: Ollama (LLM) + API with the REAL agents + Streamlit UI.
+#
+# Before the first start, on the host (see README "Docker"):
+#   dvc pull models/vision/yolov8s_merged_e30.pt.dvc data/policy/processed.dvc
+#   set OLLAMA_MODELS_DIR in .env (folder holding qwen2.5:7b, see .env.example)
+#   docker compose build
+#   docker compose run --rm api python -m agents.policy.index     # builds the policy index
+#   docker compose up -d                                           # then: docker compose ps
+#
+# Nothing heavy or secret is baked in the images: LLM models, vision weights,
+# policy data and the downloaded embedding model live in volumes.
 services:
+  ollama:
+    image: ollama/ollama:0.40.16                # same version as the host Ollama (model files)
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_NOPRUNE: "1"                       # never delete blobs in the shared models folder
+      OLLAMA_KEEP_ALIVE: 24h                    # keep qwen2.5:7b loaded (~5 GB RAM): no cold start
+    volumes:
+      # CPU only (no GPU reservation). Models already pulled on the host are reused.
+      # Default: an empty folder in the repo (git-ignored) -> no model.
+      - ${OLLAMA_MODELS_DIR:-./data/ollama/models}:/root/.ollama/models
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   api:
-    build: .
-    image: claimspilot-api
+    build:
+      context: .
+      target: full
+    image: claimspilot-api:full
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env                              # MLflow credentials... (optional: CI has none)
+        required: false
+    environment:
+      OLLAMA_HOST: http://ollama:11434          # the ollama service, not the host
+      # Langfuse tracing (cloud): off when the keys are empty (see api/tracing.py)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-${LANGFUSE_HOST:-}}
+    volumes:
+      - ./models/vision:/app/models/vision:ro   # vision weights (dvc pull)
+      - ./data/policy:/app/data/policy          # clauses + Chroma index
+      - ./data/uploads:/app/data/uploads        # claim photos, shared with the UI
+      # dataset test photos offered by the UI (dvc pull data/vision/car_dent_scratch_split/test/images);
+      # same path in api and ui, because the UI sends the photo's absolute path
+      - ./data/vision/car_dent_scratch_split/test/images:/app/data/vision/car_dent_scratch_split/test/images:ro
+      - model-cache:/cache                      # embedding model downloaded once (~0.5 GB)
+    depends_on:
+      ollama:
+        condition: service_healthy
     healthcheck:
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
-      interval: 30s
+      interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      target: ui
+    image: claimspilot-ui
+    ports:
+      - "8501:8501"
+    environment:
+      CLAIMSPILOT_API_URL: ${CLAIMSPILOT_API_URL:-http://api:8000}
+      CLAIMSPILOT_UPLOADS: /app/data/uploads    # same path as in the api container
+    volumes:
+      - ./data/uploads:/app/data/uploads
+      - ./data/vision/car_dent_scratch_split/test/images:/app/data/vision/car_dent_scratch_split/test/images:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  model-cache:
