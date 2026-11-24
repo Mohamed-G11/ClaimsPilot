@@ -14,6 +14,7 @@ Decision (see make_decision):
 """
 import importlib.util
 import logging
+import os
 
 from pydantic import BaseModel
 
@@ -94,10 +95,20 @@ def vision_real(claim: ClaimInput) -> VisionResult:
 
 
 def nlp_real(claim: ClaimInput, vision: VisionResult) -> NLPResult:
-    """Hend's agent."""
+    """Hend's agent. NLP_METHOD (env) picks "keywords" or "llm" (default "llm": Ollama
+    extraction, which falls back to the keyword rules when Ollama does not answer)."""
     from agents.nlp.agent import run
 
-    return run(claim, vision)
+    return run(claim, vision, method=nlp_method())
+
+
+def nlp_method() -> str:
+    """The NLP method from NLP_METHOD; an unknown value is an error (stub + human review)."""
+    method = os.getenv("NLP_METHOD", "llm").strip().lower() or "llm"
+    if method not in ("keywords", "llm"):
+        raise ValueError(f"NLP_METHOD must be 'keywords' or 'llm', got {method!r}")
+    return method
+
 
 def policy_real(claim: ClaimInput, vision: VisionResult) -> PolicyResult:
     """Mohamed's agent. With tracing on, its retrieval and LLM call are traced too."""

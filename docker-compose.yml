@@ -41,6 +41,7 @@ services:
         required: false
     environment:
       OLLAMA_HOST: http://ollama:11434          # the ollama service, not the host
+      NLP_METHOD: ${NLP_METHOD:-llm}            # NLP agent: llm (Ollama, keyword fallback) or keywords
       # Langfuse tracing (cloud): off when the keys are empty (see api/tracing.py)
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}

@@ -17,6 +17,7 @@ def no_langfuse(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAIMSPILOT_TRACING", "0")
     monkeypatch.setenv("CLAIMSPILOT_WARMUP", "0")      # no LLM warm-up call in tests
+    monkeypatch.setenv("NLP_METHOD", "keywords")       # no NLP LLM call in tests
     tracing.client.cache_clear()
     yield
     if hasattr(tracing.client, "cache_clear"):     # a test may have replaced client()

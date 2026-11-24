@@ -1,7 +1,7 @@
 ﻿llm:
   enabled: true
   provider: ollama
-  model: qwen2.5:3b
+  model: qwen2.5:7b
   temperature: 0
-  timeout_seconds: 150
+  timeout_seconds: 30
   max_tokens: 1024

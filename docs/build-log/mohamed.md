@@ -1728,6 +1728,37 @@ Found while reviewing the screenshots, and fixed (`1d0ffe0`): the result first l
 
 ---
 
+## Entry 25 — The API now uses Hend's NLP LLM (`NLP_METHOD`)
+
+**Date:** 2026-11-24 · **Branch:** `feat/api-nlp-llm` (from `main`) · not pushed
+**Problem:** `api/pipeline.py` called `agents.nlp.agent.run(claim, vision)`, and `run()` defaults to `method="keywords"`, so the NLP LLM was never used in the API.
+
+### Files, in order
+
+1. `api/pipeline.py`: new `nlp_method()` reads the env variable `NLP_METHOD` (`keywords` or `llm`, default `llm`, case-insensitive, empty = default). `nlp_real()` passes it to `run(..., method=...)`. An unknown value raises `ValueError`, so the pipeline uses the NLP stub and the claim goes to human review (same safety rule as any agent error).
+2. `docker-compose.yml` (api service): `NLP_METHOD: ${NLP_METHOD:-llm}`. `.env.example`: `NLP_METHOD=llm` with a comment.
+3. `agents/nlp/config.yaml` (**Hend's file**; Mohamed takes responsibility and informs her): `model: qwen2.5:3b` → `qwen2.5:7b` (same model as the policy agent, already loaded), `timeout_seconds: 150` → `30`.
+4. `tests/test_nlp_method.py` (new, 5 tests): default is `llm`; `keywords`, `LLM` and empty values are passed correctly; an unknown value raises. `tests/conftest.py`: `NLP_METHOD=keywords` before every test, so no test calls Ollama.
+
+### Concepts
+
+- If Ollama does not answer within the timeout, `extract_with_llm` returns `None` and Hend's agent uses the keyword rules; `model_version` then stays `nlp-keywords-v3`, which shows in the result which method really ran.
+
+### Check on the Docker stack (api image rebuilt, GPU override)
+
+Claim `NLPLLM-1`, AXA-TR, dataset door photo, text "porte endomage":
+- vision: door / dent 0.68, moderate;
+- NLP: `described_parts=["door"]`, `consistent`, score 1.0, `model_version=nlp-llm-qwen2.5:7b`;
+- decision: **approve**, confidence 0.6849, `agents` all real, decision via `langgraph`.
+- `ruff` clean, **282 passed**.
+
+### Open questions for Mohamed
+
+1. The 30 s timeout is for a loaded model. If the NLP and policy agents ever use different models, Ollama must swap them and the first call can exceed 30 s (then the keyword fallback is used silently). Today both use qwen2.5:7b.
+2. Hend's own NLP tests and her evaluation numbers were made with `qwen2.5:3b`; they should be re-run with 7b.
+
+---
+
 ## New issues found in teammates' code on Nov 16 (I changed nothing)
 
 **Wiem — vision, UI**
